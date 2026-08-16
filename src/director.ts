@@ -1,0 +1,94 @@
+/**
+ * Director-scope narrowing: apply and restore the toolset mask, presentation
+ * mode, the five vibe tools, and the director instructions section on ONE
+ * agent's scoped ctx. Every registration is scoped to the director's
+ * `agent.ctx`, so it is visible only to that agent, is exempt from the
+ * inherited-layer restriction, and auto-unwinds if the agent is disposed
+ * before `/vibe off`.
+ *
+ * @module @dsh-plugin/dsh-vibe-mode/director
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { ResolvedVibeModeConfig } from './types.ts'
+import { foldVibeMode } from './types.ts'
+import { WorkerRegistry } from './workers.ts'
+import { defineVibeTools } from './tools.ts'
+
+/** Prompt-section order; plan-mode's `plan:policy` uses 50. */
+export const DIRECTOR_SECTION_ORDER = 51
+/** Prompt-section name for the DIRECTOR instructions. */
+export const DIRECTOR_SECTION_NAME = 'director:instructions'
+
+/** The four narrowing registrations, disposed together. */
+export interface DirectorScope {
+  /** The exact live director agent. */
+  readonly agent: Agent
+  /** This director's worker bookkeeping. */
+  readonly registry: WorkerRegistry
+  /** Restore every narrowing registration. Idempotent. */
+  dispose(): void
+}
+
+/**
+ * Apply the DIRECTOR narrowing to one agent: restrict the inherited toolset
+ * to the configured read-only allow-list, force the native presentation (the
+ * code-mode `run_code` transport cannot be removed by `restrict`), register
+ * the five vibe tools on the agent's own scope, and mount the director
+ * instructions section. All disposers are collected; `scope.dispose()` rolls
+ * them back in reverse order.
+ *
+ * @param ctx - plugin root ctx (services resolve through `agent.ctx`).
+ * @param agent - the director to narrow.
+ * @param config - validated deployment config.
+ * @returns the composite scope with its unified disposer.
+ */
+export function applyDirectorScope(ctx: Context, agent: Agent, config: ResolvedVibeModeConfig): DirectorScope {
+  const disposers: Array<() => void> = []
+  const registry = new WorkerRegistry(ctx, agent, config.maxConsecutiveWakes)
+
+  try {
+    // 1. Mask the inherited toolset. Unknown names throw loudly here with the
+    // known global list — the loud registration-time validation the config
+    // defers to the tools service.
+    disposers.push(agent.ctx.tools.restrict({ allow: config.readOnlyTools }))
+    // 2. Force native presentation so code-mode `run_code` cannot bypass the
+    // mask. Throws if the scope already declared a mode (one composition).
+    disposers.push(agent.ctx.tools.presentAs('native'))
+    // 3. The five vibe tools on the director's own scope: visible only to the
+    // director, unaffected by the restriction, auto-unwinding with the agent.
+    for (const tool of defineVibeTools(ctx, registry, config)) {
+      disposers.push(agent.ctx.tools.register(tool))
+    }
+    // 4. The DIRECTOR instructions, fold-driven: the text renders only while
+    // the session log says vibe mode is active (resume/fork restore it).
+    disposers.push(agent.ctx.systemPrompt.section({
+      name: DIRECTOR_SECTION_NAME,
+      order: DIRECTOR_SECTION_ORDER,
+      text: (context) => {
+        const subject = context.agent ?? agent
+        return foldVibeMode(subject.session.events) ? config.section : ''
+      },
+    }))
+  } catch (error) {
+    // Roll back whatever applied before the failure so a partial enter never
+    // leaves a half-narrowed director.
+    for (let index = disposers.length - 1; index >= 0; index -= 1) disposers[index]!()
+    throw error
+  }
+
+  let disposed = false
+  return {
+    agent,
+    registry,
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      registry.dispose()
+      for (let index = disposers.length - 1; index >= 0; index -= 1) {
+        disposers[index]!()
+      }
+    },
+  }
+}

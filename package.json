@@ -1,0 +1,61 @@
+{
+  "name": "@dsh-plugin/dsh-vibe-mode",
+  "description": "DIRECTOR mode for dsh: narrows the main agent to read-only + 5 worker-control tools and spawns fast/good persisted worker subagents (vibe/director port)",
+  "version": "0.1.0-rc.6",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./types": {
+      "types": "./lib/types/types.d.ts",
+      "default": "./lib/types/types.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false && tsc --noEmit -p tsconfig.test.json --pretty false",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-agent": "next",
+    "@deepseek-ai/dsh-commands": "next",
+    "@deepseek-ai/dsh-llm": "next",
+    "@deepseek-ai/dsh-plan-mode": "next",
+    "@deepseek-ai/dsh-session": "next",
+    "@deepseek-ai/dsh-subagent": "next",
+    "@deepseek-ai/dsh-subagent-spawn-in-process": "next",
+    "@deepseek-ai/dsh-system-prompt": "next",
+    "@deepseek-ai/dsh-tools": "next",
+    "@deepseek-ai/schemastery": "next"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "next",
+    "@deepseek-ai/dsh-scope": "next",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
