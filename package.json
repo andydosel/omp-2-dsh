@@ -30,6 +30,11 @@
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false && tsc --noEmit -p tsconfig.test.json --pretty false",
