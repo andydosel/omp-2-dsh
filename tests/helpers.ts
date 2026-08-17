@@ -123,3 +123,29 @@ import { Session } from '@deepseek-ai/dsh-session'
 export function createSession(id: string): Session {
   return Session.create(SessionId(id))
 }
+
+// Every spec file that imports these helpers registers this fixture: the
+// plugin-owned review-tree file (`<DSH_HOME>/storages/compact-review.json`)
+// is isolated per test under a fresh temp dir. Without it, tests running in
+// parallel workers all hit the SAME cwd file and their atomic-rename writes
+// collide (Windows EPERM) — a pre-existing flake surfaced while hardening.
+import { afterEach, beforeEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+beforeEach(() => {
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-compact-tests-'))
+})
+
+afterEach(() => {
+  const home = process.env.DSH_HOME
+  if (home !== undefined) {
+    try {
+      rmSync(home, { recursive: true, force: true })
+    } catch {
+      // Best-effort cleanup: a late async drain may still hold the dir.
+    }
+    delete process.env.DSH_HOME
+  }
+})
