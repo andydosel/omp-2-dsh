@@ -126,6 +126,12 @@ export class AdvisorRuntime {
   private lastGeneration = 0
   /** Bumped by disable/teardown so an in-flight start aborts its own creation. */
   private epoch = 0
+  /**
+   * The last reviewer compose/creation failure message, surfaced by
+   * `/advisor status` as `reviewers: 0 (error: …)`. Cleared on a successful
+   * start, disable, or teardown so a stale failure never masks a live state.
+   */
+  private reviewerError: string | undefined
   private readonly observer: DeltaObserver
   private readonly delivery: DeliveryController
   private readonly guard = new EmissionGuard()
@@ -216,6 +222,7 @@ export class AdvisorRuntime {
     this.delivery.reset()
     this.guard.reset()
     this.adviseCalls.clear()
+    this.reviewerError = undefined
     this.phase = 'idle'
     void this.disposeReviewers()
   }
@@ -249,6 +256,7 @@ export class AdvisorRuntime {
   private async teardownPrimary(): Promise<void> {
     this.ctx.logger.info('dsh-advisor: primary agent disposed; detaching')
     this.epoch++
+    this.reviewerError = undefined
     this.phase = 'idle'
     await this.disposeReviewers()
     this.primary = undefined
@@ -464,9 +472,15 @@ export class AdvisorRuntime {
       }
       this.lastGeneration = this.primary.session.surface.replaceGeneration
       this.phase = 'ready'
+      this.reviewerError = undefined
       await this.feedBaseline()
     } catch (error) {
-      this.ctx.logger.warn('dsh-advisor: failed to start reviewers: %o', error)
+      // Loud by contract: a reviewer that cannot be composed must not fail
+      // silently into "reviewers: none" — the message is logged AND surfaced
+      // by `/advisor status` until a later start succeeds.
+      const message = error instanceof Error ? error.message : String(error)
+      this.reviewerError = message
+      this.ctx.logger.warn('dsh-advisor: failed to start reviewers: %s', message)
       this.phase = 'idle'
       await this.disposeReviewers()
     }
@@ -529,8 +543,31 @@ export class AdvisorRuntime {
     // 1. Join the primary's preset composition (required: rosterless global
     //    layers resolve empty otherwise).
     agentCtx.get('agentPresets')?.composeFrom(agentCtx, primary.ctx)
-    // 2. Restrict inherited global tools to the allow-list.
-    agentCtx.tools.restrict({ allow: spec.tools })
+    // 2. Restrict inherited global tools to the allow-list, INTERSECTED with
+    //    the tools actually present in the reviewer's agent scope: the
+    //    default list names standard-preset tools, and a narrower preset
+    //    (e.g. minimal) simply does not carry every name. Dropped names are
+    //    logged as a warning; an empty intersection fails loud (nothing to
+    //    restrict to), which the caller surfaces as a visible reviewer error.
+    const reviewerAgent = agentCtx.agent as Agent
+    const present = new Set(agentCtx.tools.schemas(reviewerAgent).map(schema => schema.name))
+    const allowed = spec.tools.filter(name => present.has(name))
+    const dropped = spec.tools.filter(name => !present.has(name))
+    if (dropped.length > 0) {
+      this.ctx.logger.warn(
+        'dsh-advisor: reviewer "%s" tool names not present in the agent toolset (dropped): %s',
+        spec.name,
+        dropped.join(', '),
+      )
+    }
+    if (allowed.length === 0) {
+      throw new Error(
+        `dsh-advisor: reviewer "${spec.name}" has no usable tools in the agent toolset `
+        + `(configured: ${spec.tools.join(', ') || '(none)'}; `
+        + `known global tools: ${[...present].sort().join(', ') || '(none)'})`,
+      )
+    }
+    agentCtx.tools.restrict({ allow: allowed })
     // 3. Register the scoped advise tool (mask-immune: scoped registrations
     //    are not affected by the allow mask).
     agentCtx.tools.register(defineAdviseTool())
@@ -592,7 +629,9 @@ export class AdvisorRuntime {
       this.phase = 'idle'
       if (this.enabled) await this.start()
     } catch (error) {
-      this.ctx.logger.warn('dsh-advisor: reset failed: %o', error)
+      const message = error instanceof Error ? error.message : String(error)
+      this.reviewerError = message
+      this.ctx.logger.warn('dsh-advisor: reset failed: %s', message)
       this.phase = 'idle'
     }
   }
@@ -612,7 +651,9 @@ export class AdvisorRuntime {
       lines.push('immune window: active (concern/blocker downgraded to asides)')
     }
     if (this.reviewers.size === 0) {
-      lines.push('reviewers: none')
+      lines.push(this.reviewerError === undefined
+        ? 'reviewers: none'
+        : `reviewers: 0 (error: ${this.reviewerError})`)
     } else {
       for (const reviewer of this.reviewers.values()) {
         const usage = this.measureUsage(reviewer)

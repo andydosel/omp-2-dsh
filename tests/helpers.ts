@@ -33,6 +33,8 @@ export class FakeContext {
     debug: vi.fn(),
   }
   readonly getMock = vi.fn((_name: string) => undefined)
+  /** Tool names the composed reviewer scope exposes (defaults to the standard set). */
+  reviewerToolNames: string[] | undefined
 
   constructor(readonly composedPreset = false) {}
 
@@ -65,7 +67,10 @@ export class FakeContext {
     }): Promise<AgentHandle> => {
       const session = Session.create(options.sessionId)
       const agent = makeFakeReviewerAgent(options.sessionId, options.agentOptions ?? {}, session)
-      const agentCtx = new FakeAgentContext(agent, { composedPreset: this.composedPreset })
+      const agentCtx = new FakeAgentContext(agent, {
+        composedPreset: this.composedPreset,
+        ...this.reviewerToolNames !== undefined ? { toolNames: this.reviewerToolNames } : {},
+      })
       options.setup?.(agentCtx)
       const entry: CreatedReviewer = {
         agent,
@@ -89,15 +94,20 @@ export class FakeAgentContext {
   readonly restrictSpy = vi.fn()
   readonly registerSpy = vi.fn()
   readonly sectionSpy = vi.fn()
+  readonly schemasSpy = vi.fn()
   readonly agentPresetsMock: { composeFrom: Mock }
   private readonly composed: boolean
 
   constructor(
     readonly agent: Agent,
-    options: { composedPreset?: boolean } = {},
+    options: { composedPreset?: boolean; toolNames?: string[] } = {},
   ) {
     this.composed = options.composedPreset ?? false
     this.agentPresetsMock = { composeFrom: vi.fn(() => 'preset-id') }
+    // Tools the reviewer's composed scope would expose; the intersection fix
+    // reads these before restricting. Defaults to the standard set so the
+    // stock defaultTools survive intact.
+    this.schemasSpy.mockReturnValue((options.toolNames ?? ['read', 'grep', 'glob']).map(name => ({ name })))
   }
 
   get(name: string): unknown {
@@ -113,6 +123,10 @@ export class FakeAgentContext {
     register: (definition: { name: string }) => {
       this.registerSpy(definition)
       return () => {}
+    },
+    schemas: (scope?: unknown): Array<{ name: string }> => {
+      this.schemasSpy(scope)
+      return this.schemasSpy.mock.results.at(-1)!.value as Array<{ name: string }>
     },
   }
 

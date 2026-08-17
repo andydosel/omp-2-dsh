@@ -100,6 +100,51 @@ describe('reviewer construction', () => {
     expect(role.text).toContain(ROLE_SECTION)
   })
 
+  it('intersects reviewer tools with the toolset actually present and warns on dropped names', async () => {
+    // The reviewer's composed scope only carries `read`; grep/glob are missing
+    // (the minimal-preset shape from the E2E). The restrict must degrade to
+    // the intersection instead of throwing on unknown names.
+    ctx.reviewerToolNames = ['read']
+    attach()
+    await bindPrimary()
+
+    expect(ctx.createSpy).toHaveBeenCalledTimes(1)
+    const agentCtx = ctx.created[0]!.agentCtx
+    expect(agentCtx.restrictSpy).toHaveBeenCalledWith({ allow: ['read'] })
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('tool names not present in the agent toolset'),
+      expect.stringContaining('default'),
+      'grep, glob',
+    )
+    // The reviewer still exists and the status reports it.
+    expect(ctx.created[0]!.agentCtx.sectionSpy).toHaveBeenCalled()
+    const status = (advisorCommandHandler(runtime, 'status') as { text: string }).text
+    expect(status).toContain('default')
+    expect(status).not.toContain('reviewers: 0 (error')
+  })
+
+  it('fails loud when no reviewer tool survives the intersection (empty → error surfaced in status)', async () => {
+    // The reviewer scope carries tools the spec never allows (write/bash);
+    // nothing from defaultTools is present → composition must fail loudly and
+    // the status must surface the error instead of "reviewers: none".
+    ctx.reviewerToolNames = ['write', 'bash']
+    attach()
+    await bindPrimary()
+    await flush()
+
+    // The setup throw rejects creation: no reviewer entry is ever recorded.
+    expect(ctx.createSpy).not.toHaveBeenCalled()
+    expect(ctx.created).toHaveLength(0)
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to start reviewers'),
+      expect.stringContaining('no usable tools'),
+    )
+    const status = (advisorCommandHandler(runtime, 'status') as { text: string }).text
+    expect(status).toContain('reviewers: 0 (error:')
+    expect(status).toContain('no usable tools')
+    expect(status).not.toContain('reviewers: none')
+  })
+
   it('joins the primary preset composition when a roster is composed', async () => {
     const presetCtx = new FakeContext(true)
     const runtime2 = new AdvisorRuntime(presetCtx as unknown as Context, makeConfig())
