@@ -74,7 +74,7 @@ plugin/dsh-advisor/
 
 - 根 ctx `session/event`,按 `session.id === primaryId` 过滤;delta = 新增 surface 事件(`user/message`/`assistant/message`/`tool/result`),跳过 source 为 advisor 插件自身的消息(防自审)。
 - 评审者自维护 cursor(已看 seq);delta 经 `session.deriveEventMessage(event)` 逐条投影成 Message 文本,拼成评审 prompt(含 reasoning/intent/tool 调用,secret 脱敏按 dsh 既有机制)。
-- 评审调用 = 插件直接 `ctx.llm.stream()`(非 agent 循环;`purpose: 'advisor'` 若 adapter 支持,否则默认)——评审者是"独立 agent + 插件驱动其 prompt"的混合:推荐**评审者 agent 仅承载工具执行与隔离**(advise/read/grep/glob),模型调用由插件用 `ctx.llm.stream()` 驱动(可控、可测、免 agent 循环开销);见拍板点 1。
+- 评审调用:评审者作为**完整 agent**(自带循环)——插件把 delta prompt 经 `followup` 喂入评审者,评审者自行迭代工具调用与生成;插件只监听评审者会话事件(尤其 `advise` 工具调用及其结果)并路由投递。
 
 ## 7. 评审者构造与隔离
 
@@ -83,6 +83,7 @@ plugin/dsh-advisor/
   2. `agentCtx.tools.restrict({allow: config.tools ?? ['read','grep','glob']})`;
   3. `agentCtx.tools.register(advise)`(scoped,掩码免疫);
   4. 委托策略固定只读权限。
+- 插件持有评审者 `AgentHandle`;用 `followup` 喂 delta、监听其会话事件捕获 advise 调用。
 - 评审者 agent 的会话独立落盘(`__advisor` 语义:插件为评审者会话命名 `session-advisor` 或按 roster slug);`/advisor status` 展示每项:state/model/context 用量/token 用量。
 - WATCHDOG.md 内容以 `<attention>` 块追加进评审 prompt;WATCHDOG.yml roster:name/enabled/model/tools/instructions(顶部共享 instructions 拼接)。
 
@@ -115,14 +116,14 @@ plugin/dsh-advisor/
     roster: []            # WATCHDOG.yml 静态内联(文件发现为主)
 ```
 
-## 11. 拍板点(待确认)
+## 11. 拍板点(全部确认,含一处修正)
 
-1. **评审者形态**:插件直接 `ctx.llm.stream()` 驱动评审 + agent 仅承载工具/隔离(推荐:v1 可控可测)vs 评审者作为完整 agent 循环(自己跑 prompt,插件只喂 delta)?
-2. **默认工具集**:`read/grep/glob`(omp 默认),确认?
-3. **steer 交付策略**:concern/blocker 空闲终局回答时——concern 保留卡片、blocker 仍 steer(推荐,照 omp)确认?
-4. **WATCHDOG 文件名**:用 `WATCHDOG.md`/`WATCHDOG.yml`(omp 同名)还是 `.dsh/WATCHDOG.*`?
-5. **成本表**:v1 只报 token、cost 可配(推荐)还是必须内置费率?
-6. **包名**:`dsh-advisor`,确认?
+1. **评审者形态(修正)**:评审者 = **完整 agent(自带循环)**——插件把 delta 经 `followup`/`inject` 喂入评审者 agent,评审者自跑循环、调用受限工具(read/grep/glob),要提建议时调用其 scoped `advise` 工具;插件监听评审者会话事件,见 advise 调用后按严重度路由投递。理由:`ctx.llm.stream()` 为单次调用、无工具循环,无法支撑工具型评审者;原"插件驱动 stream + agent 仅承载工具"方案废弃。 —— ✅ 确认
+2. **默认工具集**:`read/grep/glob`(omp 默认),确认? —— ✅ 确认(按推荐)
+3. **steer 交付策略**:concern/blocker 空闲终局回答时——concern 保留卡片、blocker 仍 steer(推荐,照 omp)确认? —— ✅ 确认(按推荐)
+4. **WATCHDOG 文件名**:用 `WATCHDOG.md`/`WATCHDOG.yml`(omp 同名)还是 `.dsh/WATCHDOG.*`? —— ✅ 确认(按推荐)
+5. **成本表**:v1 只报 token、cost 可配(推荐)还是必须内置费率? —— ✅ 确认(按推荐)
+6. **包名**:`dsh-advisor`,确认? —— ✅ 确认(按推荐)
 
 ## 12. 风险
 
@@ -130,6 +131,7 @@ plugin/dsh-advisor/
 - 评审者 llm.stream 与 agent 工具会话的分离设计无先例,需在实现中验证(ctx.llm 直呼 + agent.ctx 工具)。
 - WATCHDOG 发现为自建,路径约定(用户级/项目级/`.dsh/`)需与用户习惯对齐。
 - 用量/cost 只按 token 估;无 provider 精确计价。
+- 评审者为完整 agent,意味着每次评审有完整 agent 循环开销(提示词/工具组装);评审频率受 delta 批量与 syncBacklog 控制。
 
 ## 13. 验证(免 API key)
 
@@ -138,3 +140,4 @@ plugin/dsh-advisor/
 ## 14. 变更记录
 
 - **v1.0**(2026-08-17):初始设计,等待拍板点确认。
+- **v1.1**(2026-08-17):拍板点全部确认;评审者形态修正为完整 agent 循环(原 llm.stream 方案与工具型评审冲突)。
