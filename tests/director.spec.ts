@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { applyDirectorScope, foldVibeMode } from '../src/index.ts'
 import { agentWithSession, assembleFor, setup, MockSubagents, VIBE_CONFIG, visibleToolNames } from './harness.ts'
 
@@ -67,11 +67,26 @@ describe('director narrowing', () => {
     expect(names.sort()).toEqual([...READ_ONLY, ...VIBE_TOOLS].sort())
   })
 
-  it('an unknown readOnlyTools name throws loudly at application', async () => {
+  it('drops readOnlyTools names absent from the toolset with a warning', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'narrow-badname')
+    const warn = vi.spyOn(ctx.logger, 'warn')
     const bad = { ...ctx.vibeMode.config, readOnlyTools: ['read', 'no_such_tool'] }
-    expect(() => applyDirectorScope(ctx, director, bad)).toThrow(/no_such_tool/)
+    const scope = applyDirectorScope(ctx, director, bad)
+    // The unknown name is dropped; the surviving allow-list still restricts.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('readOnlyTools names not present'),
+      'no_such_tool',
+    )
+    expect(visibleToolNames(ctx, director).sort()).toEqual([...['read'], ...VIBE_TOOLS].sort())
+    scope.dispose()
+  })
+
+  it('throws when no readOnlyTools name is present in the toolset', async () => {
+    const ctx = await setup(new MockSubagents())
+    const director = await agentWithSession(ctx, 'narrow-empty')
+    const empty = { ...ctx.vibeMode.config, readOnlyTools: ['no_such_tool', 'also_missing'] }
+    expect(() => applyDirectorScope(ctx, director, empty)).toThrow(/none of the configured readOnlyTools/)
   })
 
   it('dispose is idempotent and rolls back every registration', async () => {

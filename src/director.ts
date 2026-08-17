@@ -49,10 +49,28 @@ export function applyDirectorScope(ctx: Context, agent: Agent, config: ResolvedV
   const registry = new WorkerRegistry(ctx, agent, config.maxConsecutiveWakes)
 
   try {
-    // 1. Mask the inherited toolset. Unknown names throw loudly here with the
-    // known global list — the loud registration-time validation the config
-    // defers to the tools service.
-    disposers.push(agent.ctx.tools.restrict({ allow: config.readOnlyTools }))
+    // 1. Mask the inherited toolset. Intersect the configured allow-list with
+    // the tools actually present in this agent's scope: the default list names
+    // standard-preset tools, and a narrower preset (e.g. minimal) simply does
+    // not carry every name. Dropped names are logged as a warning; an empty
+    // intersection still fails loud (nothing to restrict to).
+    const present = new Set(agent.ctx.tools.schemas(agent).map(schema => schema.name))
+    const allowed = config.readOnlyTools.filter(name => present.has(name))
+    const dropped = config.readOnlyTools.filter(name => !present.has(name))
+    if (dropped.length > 0) {
+      ctx.logger.warn(
+        'dsh-vibe-mode: readOnlyTools names not present in the agent toolset (dropped): %s',
+        dropped.join(', '),
+      )
+    }
+    if (allowed.length === 0) {
+      throw new Error(
+        `dsh-vibe-mode: none of the configured readOnlyTools are present in the agent toolset `
+        + `(configured: ${config.readOnlyTools.join(', ') || '(none)'}; `
+        + `known global tools: ${[...present].sort().join(', ') || '(none)'})`,
+      )
+    }
+    disposers.push(agent.ctx.tools.restrict({ allow: allowed }))
     // 2. Force native presentation so code-mode `run_code` cannot bypass the
     // mask. Throws if the scope already declared a mode (one composition).
     disposers.push(agent.ctx.tools.presentAs('native'))

@@ -39,9 +39,30 @@ export interface TurnEndResult {
   readonly session: SessionId
   /** The turn number that ended. */
   readonly turn: number
-  /** The child's final assistant output text, or undefined when it logged none. */
-  readonly output: string | undefined
+  /**
+   * The child's final assistant output text. ABSENT (not `undefined`) when
+   * the child logged none: the canonical value must be lossless JSON, and an
+   * `undefined` field value is not representable.
+   */
+  readonly output?: string
   readonly status: 'completed' | 'timeout' | 'aborted' | 'disposed'
+}
+
+/**
+ * Build one canonical `vibe_wait` result, omitting the `output` key entirely
+ * when the worker produced no final text. The tool's canonical output must be
+ * plain lossless JSON (the tools service snapshots it), and an `undefined`
+ * field value would fail that boundary.
+ */
+function turnEndResult(
+  session: SessionId,
+  turn: number,
+  status: TurnEndResult['status'],
+  output: string | undefined,
+): TurnEndResult {
+  return output === undefined
+    ? { session, turn, status }
+    : { session, turn, status, output }
 }
 
 /** Options for one `waitForTurn` call. */
@@ -198,7 +219,7 @@ export class WorkerRegistry {
       // Already completed before the wait registered: resolve from the log.
       if (completedTurnsOf(readEvents() ?? []) >= turn) {
         options.onSettled?.()
-        resolve({ session: childId, turn, output: this.outputText(readEvents() ?? []), status: 'completed' })
+        resolve(turnEndResult(childId, turn, 'completed', this.outputText(readEvents() ?? [])))
         return
       }
       let offTimeout: () => void = () => {}
@@ -219,15 +240,10 @@ export class WorkerRegistry {
         }
         resolve(result!)
       }
-      const settle = (): void => finish({
-        session: childId,
-        turn,
-        output: this.outputText(readEvents() ?? []),
-        status: 'completed',
-      })
+      const settle = (): void => finish(turnEndResult(childId, turn, 'completed', this.outputText(readEvents() ?? [])))
       this.addWaiter(childId, turn, settle)
       const timer = setTimeout(() => {
-        finish({ session: childId, turn, output: undefined, status: 'timeout' })
+        finish(turnEndResult(childId, turn, 'timeout', undefined))
       }, options.timeoutMs)
       offTimeout = () => { clearTimeout(timer) }
       // Exec signal: the director's turn was cancelled or the tool call aborted.

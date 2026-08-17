@@ -69,7 +69,63 @@ describe('worker registry', () => {
     )
     expect(result.status).toBe('timeout')
     expect(result.output).toBeUndefined()
+    // The canonical value omits the absent output key entirely (lossless JSON).
+    expect('output' in result).toBe(false)
     registry.dispose()
+  })
+
+  it('canonical results round-trip losslessly through JSON (no undefined fields)', async () => {
+    const assertLossless = (value: unknown): void => {
+      expect(JSON.parse(JSON.stringify(value))).toEqual(value)
+      const walk = (current: unknown): void => {
+        if (Array.isArray(current)) {
+          for (const item of current) walk(item)
+          return
+        }
+        if (current !== null && typeof current === 'object') {
+          for (const [key, item] of Object.entries(current as Record<string, unknown>)) {
+            expect(item, `field ${key} must not be undefined`).not.toBeUndefined()
+            walk(item)
+          }
+        }
+      }
+      walk(value)
+    }
+
+    // Completed with output: the output key is present and serializable.
+    const withOutput = await (async () => {
+      const ctx = await setup(new MockSubagents())
+      const director = await agentWithSession(ctx, 'lossless-ok')
+      const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+      const child = Session.create(SessionId('w-lossless-ok'))
+      registry.spawn(SessionId('w-lossless-ok'), 'good', 'iota', undefined)
+      const promise = waitForTurn(ctx, registry, 'w-lossless-ok', 1, () => child.events)
+      childTurn(child, 1, 'final answer')
+      const event = child.events.findLast(e => e.type === 'turn/end')!
+      ctx.emit('session/event', child, event)
+      const result = await promise
+      registry.dispose()
+      return { results: [result] }
+    })()
+    assertLossless(withOutput)
+
+    // Timeout without output: no `undefined` field rides in the canonical value.
+    const withoutOutput = await (async () => {
+      const ctx = await setup(new MockSubagents())
+      const director = await agentWithSession(ctx, 'lossless-timeout')
+      const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+      registry.spawn(SessionId('w-lossless-tout'), 'fast', 'kappa', undefined)
+      const result = await registry.waitForTurn(
+        SessionId('w-lossless-tout'),
+        1,
+        () => undefined,
+        { timeoutMs: 20, signal: new AbortController().signal },
+      )
+      registry.dispose()
+      return { results: [result] }
+    })()
+    assertLossless(withoutOutput)
+    expect(withoutOutput.results[0]).toEqual({ session: SessionId('w-lossless-tout'), turn: 1, status: 'timeout' })
   })
 
   it('rejects aborted waits with the exec signal reason', async () => {
