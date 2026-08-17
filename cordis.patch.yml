@@ -1,0 +1,57 @@
+# dsh profile-main overlay: compact-mode + vibe-mode, applied AFTER the
+# dsh-base and dsh-web-app bundle layers (via `--patch` on the web profile, or
+# as the user layer of a `main` profile installed under ~/.dsh/profiles/).
+#
+# The base bundle mounts `compaction-basic` (row `compaction-basic`) and
+# `command-compact` (row `command-compact`). Both must be disabled: compact-mode
+# provides `ctx.compaction` (a single-backend service — a second provider is a
+# hard conflict) and registers the `/compact*` command family (duplicate
+# `compact` registration error otherwise). The `name` guard makes a base change
+# fail loud instead of disabling the wrong row.
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  disabled: true
+
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'
+  disabled: true
+
+# Insert the two plugins. `name` is a module specifier the Cordis Loader
+# imports. Windows requires absolute paths as file:// URLs (a bare `C:/...`
+# path is rejected with ERR_UNSUPPORTED_ESM_URL_SCHEME), and the loader
+# resolves package names only from the dsh installation/profile module
+# fallback — these out-of-tree packages are not installed there, so we point
+# at the built ESM entry files directly. Build prerequisites: tree-engine,
+# compact-mode and vibe-mode must be `pnpm run build` first (see README/run.ps1).
+- insert:
+    - id: compact-mode
+      name: 'file:///C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/dsh-compact-mode/lib/index.js'
+      config:
+        thresholdRatio: 0.6            # shake 后 >60% 提示进入 compact 模式
+        keepRecentTokens: 20000        # shake 保护窗口
+        minShakeSavingsRatio: 0.05     # 防空转
+        summarizationProvider: ''      # 空 = 沿用最近请求路由
+        summarizationModel: ''
+        maxTokens: 8192
+        promptOnThreshold: true        # 60% 时提示
+        promptCooldown: 0              # 0 = 每会话每阈值一次
+        promptOnHardOverflow: true     # 硬溢出提示+选项
+        reviewTimeoutMs: 0             # 0 = 审阅不超时
+        auto: true                     # 注册自动压力/溢出监听
+        reviewTree: 'domain'           # 独立 domain 存储(web profile 已挂 storage-domain)
+        readOnlyTools: []              # 保留字段(设计 §2.9 占位,compact-mode 不使用)
+
+    - id: vibe-mode
+      name: 'file:///C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/dsh-vibe-mode/lib/types/index.js'
+      config:
+        section: >-
+          你是 DIRECTOR(指挥者),当前处于 vibe 模式。你不直接执行实现细节,而是通过
+          vibe_spawn / vibe_send / vibe_wait / vibe_kill / vibe_list 工具调度
+          fast/good 两级 worker 子代理。保持只读视野(read/glob/grep/read_image/
+          todo_write);把任务拆成可并行、自包含的小任务分派给 worker,等待其 settle,
+          审阅并迭代结果;写操作全部交给 worker 完成。
+        readOnlyTools: [read, glob, grep, read_image, todo_write]
+        provider: spawn
+        waitTimeoutMs: 60000
+        maxWaitTimeoutMs: 600000
+        maxConsecutiveWakes: 3
