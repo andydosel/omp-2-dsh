@@ -128,7 +128,6 @@ plugin/dsh-advisor/
 ## 12. 风险
 
 - steer 语义(step 边界消费)与 omp 的即时打断有差距:blocker 可能延迟一个 step;文档明示。
-- 评审者 llm.stream 与 agent 工具会话的分离设计无先例,需在实现中验证(ctx.llm 直呼 + agent.ctx 工具)。
 - WATCHDOG 发现为自建,路径约定(用户级/项目级/`.dsh/`)需与用户习惯对齐。
 - 用量/cost 只按 token 估;无 provider 精确计价。
 - 评审者为完整 agent,意味着每次评审有完整 agent 循环开销(提示词/工具组装);评审频率受 delta 批量与 syncBacklog 控制。
