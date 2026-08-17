@@ -1,9 +1,9 @@
-# 设计文档 v1.0:迁移 omp 的 read / write 工具(dsh 插件)
+# 设计文档 v1.1:迁移 omp 的 read / write 工具(dsh 插件)
 
 > 状态:设计草案,等待拍板点确认后开发
 > 基线:dsh master 本地 clone `C:/Users/Vantage_XLST/Documents/dsh`(纯参考);开发在 `C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/` 独立项目
 > 原则:一切以插件形式实现;涉及核心改动或非插件实现先提醒用户
-> 依据:omp `tools/read.md`、`tools/write.md`;dsh 侧调研 `RESEARCH-FS-TOOLS.md`(证据 file:line)
+> 依据:omp `tools/read.md`、`tools/write.md`;omp `tools/inspect_image.md`;dsh 侧调研 `RESEARCH-FS-TOOLS.md`(证据 file:line)
 
 ---
 
@@ -12,6 +12,7 @@
 把 omp 的 `read` / `write` 工具迁移为 dsh 插件,获得 omp 的"单工具全能"体验:
 
 - **read**:一个 `path` 字符串 + 尾部选择器(`:A-B` / `:A+C` / 多区间 / `:raw` / `:conflicts`),覆盖:文本文件(行窗口)、目录树、归档(.tar/.tar.gz/.tgz/.zip/.jar/.war/.ear/.apk)、SQLite(表列表/schema/行/查询)、URL(渲染管线)、文档(.pdf/.docx/.pptx/.xls/.rtf/.epub)、notebook(.ipynb)、图片。
+- **inspect_image**(第五工具):把本地图片 + 问题发给视觉模型,返回文字分析(对应 omp `inspect_image`;dsh 当前无此工具)。
 - **write**:文件整写、归档条目写(原子重写容器)、SQLite 行 insert/update/delete、merge-conflict 解析。
 
 ## 2. 概念对齐(omp ↔ dsh 现状)
@@ -61,6 +62,7 @@ plugin/dsh-tool-read-write/
       sqlite-write.ts # 行写(JSON5 parse)
     edit.ts           # 移植 dsh edit(fs/edit-intent + CAS)
     read-image.ts     # 移植 dsh read_image(attachments 条件注册)
+    inspect-image.ts  # 第五工具:图片分析(视觉模型调用)
     sandbox.ts        # 沙箱提升(共享 tool-fs 模式)
     invariant.ts
   tests/
@@ -78,7 +80,8 @@ plugin/dsh-tool-read-write/
 - **归档**:后缀识别 `.tar/.tar.gz/.tgz/.zip/.jar/.war/.ear/.apk`;`:inner/path` 规范化(拒绝 `..`);目录列子项(500 上限);文本条目 UTF-8;二进制给提示。
 - **SQLite 读**:`.sqlite/.sqlite3/.db/.db3` + 头魔数校验;`:table`(schema+5 样例行)/`:table:key`(单列 PK 或 rowid)/`:table?limit=…&where=…`(20 默认/500 上限,where 校验拒绝注释分号 UNION 等)/`?q=`(1000 行上限,只读打开)。
 - **URL**(v1 简化):`http(s)`/`www.`;node fetch → JSON/纯文本直接返回,HTML 基础转文本;`:raw` 原文;结果截断 300 行/50KiB;失败给 `method: failed` 说明不抛。渲染管线(markit/alternates/feeds)不在 v1。
-- **图片**:沿用独立 `read_image` 工具(插件重注册),read 不做内联图片分支。
+- **图片(多模态)**:沿用独立 `read_image` 工具(插件重注册)——把图以 inline image block 喂给支持 image 输入的模型,read 不做内联图片分支。
+- **inspect_image(第五工具,视觉分析)**:输入 `path`(本地图片/附件引用)+ `question`;resolve 图片(格式 PNG/JPEG/GIF/WebP,头嗅探,20MiB 上限)→ 一次 `ctx.llm.stream()` 视觉调用(image block + question → 文字)→ 返回文本 + `{model, mimeType}`。视觉路由:`visionProvider`/`visionModel` 可配,空 = 沿用主路由;模型必须声明 image 输入否则拒绝。`inspectImageMode`: `auto`(仅当前模型无原生图片输入时注册,照 omp)/`on`/`off`。超时 `inspectImageTimeoutMs` 默认 300s;autoResize 为 v1.2 增强。
 - **`:conflicts`**:v1.2(依赖冲突扫描,见拍板点 7)。
 
 ## 6. write 设计(v1 范围)
@@ -113,6 +116,11 @@ plugin/dsh-tool-read-write/
     sqliteRawQueryMaxRows: 1000
     urlMaxLines: 300
     urlMaxBytes: 51200
+    inspectImageMode: auto       # auto|on|off;auto = 仅模型无原生图片输入时注册
+    inspectImageTimeoutMs: 300000 # 视觉调用超时(ms)
+    inspectImageMaxBytes: 20971520 # 20MiB 输入上限
+    visionProvider: ''           # inspect_image 视觉路由;空 = 沿用主路由
+    visionModel: ''
     writeEnabled: true
     sqliteWriteEnabled: true
     archiveWriteEnabled: true
@@ -128,6 +136,7 @@ plugin/dsh-tool-read-write/
 6. **内部 URL**(`agent://`/`skill://`/`history://` 等):v1 不做(dsh 已有 session-query/skill 工具覆盖),确认?
 7. **`:conflicts` + conflict:// 写**:v1.2(需先做冲突扫描),确认?
 8. **文档/notebook 转换**:v1.2+(依赖 pdf/docx 转换库,重),确认?
+9. **inspect_image 作为第五工具加入 v1** —— ✅ 已确认(用户拍板)。
 
 ## 10. 风险
 
@@ -143,3 +152,4 @@ plugin/dsh-tool-read-write/
 ## 12. 变更记录
 
 - **v1.0**(2026-08-17):初始设计,等待拍板点确认。
+- **v1.1**(2026-08-17):新增第五工具 inspect_image(图片+问题→视觉模型→文字分析);拍板点 9 确认。
