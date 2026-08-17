@@ -1,0 +1,7 @@
+name: standard-rw
+description: >-
+  Standard mode, but the model-facing filesystem tools (read/write/edit/
+  read_image/inspect_image) come from the profile's dsh-tool-read-write plugin
+  instead of the stock @deepseek-ai/dsh-tool-fs (the `tool-fs` row is removed).
+  glob/grep, shell, skills, planning, goals, subagents and workflows are
+  unchanged. Provided by the dsh-profile-main integration profile.

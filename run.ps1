@@ -23,8 +23,13 @@ if (-not (Test-Path $DshRoot)) {
     throw "dsh monorepo not found at $DshRoot (pass -DshRoot <path>)"
 }
 
-# Build order matters: compact-mode depends on tree-engine via workspace:*.
-foreach ($project in @('dsh-tree-engine', 'dsh-compact-mode', 'dsh-vibe-mode')) {
+# Build order matters: compact-mode depends on tree-engine via workspace:*;
+# the other plugins are standalone. All six must be built before the boot
+# (the patch points at each project's lib/ entry).
+foreach ($project in @(
+    'dsh-tree-engine', 'dsh-compact-mode', 'dsh-vibe-mode',
+    'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat'
+)) {
     $dir = Join-Path $pluginRoot $project
     if (-not (Test-Path (Join-Path $dir 'package.json'))) {
         throw "plugin project not found: $dir"
