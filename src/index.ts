@@ -33,6 +33,11 @@ export { resolveConfig, Config } from './config.ts'
 export type { AdvisorConfig, ResolvedAdvisorConfig, AdvisorWatchdogConfig } from './config.ts'
 export { advisorCommandHandler, registerAdvisorCommands } from './commands.ts'
 
+// The `advisor/status` SessionEventMap merge lives in src/types.ts (its one
+// home); this re-export keeps the module edge in the emitted index.d.ts, so
+// aggregate programs consuming the declarations still receive the merge.
+export type * from './types.ts'
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     advisor: AdvisorController

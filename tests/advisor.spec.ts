@@ -522,16 +522,20 @@ describe('reset signals', () => {
     await bindPrimary()
     expect(ctx.createSpy).toHaveBeenCalledTimes(1)
 
-    // Build a two-node surface, then replace node 0 with a summary.
+    // Build a two-node surface, then replace the first node with a summary.
+    // (The bound advisor now logs `advisor/status` at the head of the
+    // session, so node 0 is not necessarily seq 0 — target the first
+    // surface node explicitly.)
     const first = appendUserMessage(primary.session, 'original')
     ctx.emit('session/event', primary.session, first)
     const second = appendUserMessage(primary.session, 'second')
     ctx.emit('session/event', primary.session, second)
     const summary = appendUserMessage(primary.session, 'summarized')
+    const firstSurfaceSeq = primary.session.events.find(event => event.type === 'user/message')!.seq
     const replaceEvent = (primary.session as Session).append(
       'user/message',
       summary.data,
-      { surfaceOp: { op: 'replace', start: 0, end: 0 }, sourceEventSeqs: [0] },
+      { surfaceOp: { op: 'replace', start: firstSurfaceSeq, end: firstSurfaceSeq }, sourceEventSeqs: [firstSurfaceSeq] },
     )
     ctx.emit('session/event', primary.session, replaceEvent)
     await flush()
@@ -648,6 +652,34 @@ describe('enable/disable', () => {
     const reviewer = ctx.created[0]!.agent
     const feedsBefore = reviewer.followup.mock.calls.length
     expect(feedsBefore).toBe(0)
+  })
+})
+
+describe('advisor/status session event', () => {
+  it('appends the whole-value status on primary bind', async () => {
+    attach(makeConfig({ enabled: false }))
+    primary = makePrimary()
+    ctx.emit('agent/created', { agent: primary })
+    await flush()
+    const statuses = primary.session.events.filter(event => event.type === 'advisor/status')
+    expect(statuses).toHaveLength(1)
+    expect(statuses[0]!.data).toEqual({ enabled: false, reviewers: 0 })
+  })
+
+  it('reports the live reviewer count after reviewers start', async () => {
+    attach()
+    await bindPrimary()
+    const statuses = primary.session.events.filter(event => event.type === 'advisor/status')
+    expect(statuses.at(-1)!.data).toEqual({ enabled: true, reviewers: 1 })
+  })
+
+  it('reports disabled with zero reviewers on disable', async () => {
+    attach()
+    await bindPrimary()
+    runtime.disable()
+    await flush()
+    const statuses = primary.session.events.filter(event => event.type === 'advisor/status')
+    expect(statuses.at(-1)!.data).toEqual({ enabled: false, reviewers: 0 })
   })
 })
 

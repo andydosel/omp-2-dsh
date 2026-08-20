@@ -208,6 +208,7 @@ export class AdvisorRuntime {
     if (this.enabled) return
     this.enabled = true
     this.ctx.logger.info('dsh-advisor: enabled')
+    this.emitStatus()
     if (this.primary !== undefined && this.phase === 'idle') {
       void this.start()
     }
@@ -224,7 +225,25 @@ export class AdvisorRuntime {
     this.adviseCalls.clear()
     this.reviewerError = undefined
     this.phase = 'idle'
+    this.emitStatus()
     void this.disposeReviewers()
+  }
+
+  /**
+   * Append the whole-value `advisor/status` mirror to the bound primary
+   * session. The advisor always binds to one primary session (the first
+   * agent matching the config, `config.agentId` default ""), so the status
+   * lands on that session's log; without a bound session there is nowhere to
+   * append and the next bind emits. A disabled advisor reports zero
+   * reviewers (the dispose is in flight or already done).
+   */
+  private emitStatus(): void {
+    const session = this.primary?.session
+    if (session === undefined) return
+    session.append('advisor/status', {
+      enabled: this.enabled,
+      reviewers: this.enabled ? this.reviewers.size : 0,
+    })
   }
 
   // ---- primary binding ----
@@ -248,6 +267,7 @@ export class AdvisorRuntime {
     this.delivery.reset()
     this.guard.reset()
     this.ctx.logger.info('dsh-advisor: attached to session %s', agent.id)
+    this.emitStatus()
     if (this.enabled && this.phase === 'idle') {
       await this.start()
     }
@@ -473,6 +493,7 @@ export class AdvisorRuntime {
       this.lastGeneration = this.primary.session.surface.replaceGeneration
       this.phase = 'ready'
       this.reviewerError = undefined
+      this.emitStatus()
       await this.feedBaseline()
     } catch (error) {
       // Loud by contract: a reviewer that cannot be composed must not fail
@@ -483,6 +504,7 @@ export class AdvisorRuntime {
       this.ctx.logger.warn('dsh-advisor: failed to start reviewers: %s', message)
       this.phase = 'idle'
       await this.disposeReviewers()
+      this.emitStatus()
     }
   }
 
