@@ -1,6 +1,6 @@
 # 设计文档 v1.0:模式状态 Web UI(compact / vibe / advisor / wechat)
 
-> 状态:设计草案,等待拍板点确认后开发
+> 状态:设计定稿(拍板点全部确认),开发中
 > 依据:`RESEARCH-WEBUI-EXTENSIBILITY.md`(证据 file:line;monorepo 零改动可达全部方案)
 > 原则:一切以插件形式实现;涉及核心改动或非插件实现先提醒用户
 
@@ -69,14 +69,14 @@ plugin/dsh-channel-wechat/        # 补事件(小改)
 
 投影 schema:`compactMode {active:boolean}`、`vibeMode {active:boolean}`、`advisorStatus {enabled:boolean, reviewers:number}`、`wechatChannel {connected:boolean, account?:string}`。
 
-## 6. 拍板点(待确认)
+## 6. 拍板点(全部确认)
 
-1. **方案**:常驻 **header 徽章**(方案 b,plan 同款)为主;聊天流状态卡(方案 a)作为 v1.2——确认?(推荐 b)
-2. **包结构**:新建独立 `dsh-mode-ui`(host 投影 + client 徽章一体)vs 内嵌进各插件——推荐独立包。
-3. **profile 加载切换**:file:// → 包名 + 安装进 profile 目录,影响全部插件行,改后重跑 e2e——确认接受?
-4. **徽章交互**:点击徽章执行对应命令(plan 同款)——确认?
-5. **补事件**:advisor/wechat 补发 whole-value 状态事件——确认?
-6. **徽章集**:compact/vibe/advisor/wechat 四个(wechat 未激活时显示"离线"或隐藏,可配)——确认?
+1. **方案**:常驻 **header 徽章**(方案 b,plan 同款)为主;聊天流状态卡(方案 a)作为 v1.2——确认?(推荐 b)—— ✅ 确认(按推荐)(b 徽章为主,a 状态卡 v1.2)
+2. **包结构**:新建独立 `dsh-mode-ui`(host 投影 + client 徽章一体)vs 内嵌进各插件——推荐独立包。—— ✅ 确认(按推荐)
+3. **profile 加载切换**:file:// → 包名 + 安装进 profile 目录,影响全部插件行,改后重跑 e2e——确认接受?—— ✅ 确认(按推荐)
+4. **徽章交互**:点击徽章执行对应命令(plan 同款)——确认?—— ✅ 确认(按推荐)
+5. **补事件**:advisor/wechat 补发 whole-value 状态事件——确认?—— ✅ 确认(按推荐)
+6. **徽章集**:compact/vibe/advisor/wechat 四个(wechat 未激活时显示"离线"或隐藏,可配)——确认?—— ✅ 确认(按推荐)
 
 ## 7. 风险
 
@@ -96,4 +96,5 @@ plugin/dsh-channel-wechat/        # 补事件(小改)
 ## 9. 变更记录
 
 - **v1.0**(2026-08-18):初始设计,等待拍板点确认。
+- **v1.1**(2026-08-18):拍板点 1–6 全部确认(按推荐)。
 END
