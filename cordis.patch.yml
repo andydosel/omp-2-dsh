@@ -1,5 +1,5 @@
 # dsh profile-main overlay: compact-mode + vibe-mode + tool-read-write +
-# advisor + channel-wechat(disabled), applied AFTER the dsh-base and
+# advisor + mode-ui + channel-wechat(disabled), applied AFTER the dsh-base and
 # dsh-web-app bundle layers (via `--patch` on the web profile, or as the user
 # layer of a `main` profile installed under ~/.dsh/profiles/).
 #
@@ -33,17 +33,20 @@
 
 # ── plugins ─────────────────────────────────────────────────────────────────
 #
-# `name` is a module specifier the Cordis Loader imports. Windows requires
-# absolute paths as file:// URLs (a bare `C:/...` path is rejected with
-# ERR_UNSUPPORTED_ESM_URL_SCHEME), and the loader resolves package names only
-# from the dsh installation/profile module fallback — these out-of-tree
-# packages are not installed there, so we point at the built ESM entry files
-# directly. Build prerequisites: tree-engine, compact-mode, vibe-mode,
-# tool-read-write, advisor and channel-wechat must be `pnpm run build` first
-# (see README/run.ps1).
+# `name` is a module specifier the Cordis Loader imports. Package names are
+# resolved from the PROFILE directory's node_modules (`dsh plugin --profile
+# web add <path>` installs each plugin there as a hoisted `link:` dependency,
+# see README/run.ps1). Package names are REQUIRED for the browser to receive
+# our client bundles: client-modules resolves every loader entry by package
+# name from the profile dir, and a failed resolution is cached as a permanent
+# negative verdict. The mode-ui package declares `dsh.client` and
+# `exports["./client"]`, so its row also becomes a web boot entry.
+# Build prerequisites: tree-engine, compact-mode, vibe-mode, tool-read-write,
+# advisor, channel-wechat and mode-ui (both faces) must be `pnpm run build`
+# first (see README/run.ps1).
 - insert:
     - id: compact-mode
-      name: 'file:///C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/dsh-compact-mode/lib/index.js'
+      name: '@dsh-plugin/dsh-compact-mode'
       config:
         thresholdRatio: 0.6            # shake 后 >60% 提示进入 compact 模式
         keepRecentTokens: 20000        # shake 保护窗口
@@ -60,7 +63,7 @@
         readOnlyTools: []              # 保留字段(设计 §2.9 占位,compact-mode 不使用)
 
     - id: vibe-mode
-      name: 'file:///C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/dsh-vibe-mode/lib/types/index.js'
+      name: '@dsh-plugin/dsh-vibe-mode'
       config:
         section: >-
           你是 DIRECTOR(指挥者),当前处于 vibe 模式。你不直接执行实现细节,而是通过
@@ -84,19 +87,27 @@
     # the stock tool-fs (see the shipped `standard-rw` preset in
     # agent-presets/standard-rw/).
     - id: tool-read-write
-      name: 'file:///C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/dsh-tool-read-write/lib/index.js'
+      name: '@dsh-plugin/dsh-tool-read-write'
 
     # Session advisor: reviewer model(s) attached to the primary session,
     # restricted to read/grep/glob (+ a scoped `advise` tool). immuneTurns
     # keeps successful concern/blocker deliveries from re-steering for 3
     # primary turns; syncBacklog 0 disables the bounded catch-up wait.
     - id: advisor
-      name: 'file:///C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/dsh-advisor/lib/index.js'
+      name: '@dsh-plugin/dsh-advisor'
       config:
         enabled: true
         defaultTools: [read, grep, glob]
         immuneTurns: 3
         syncBacklog: 0
+
+    # Mode-status Web UI: host projection units (compactMode/vibeMode/
+    # advisorStatus/wechatChannel) + browser badges in the session header's
+    # utilities band. All-default config; the client face is picked up from
+    # this row's package declaration (`dsh.client` + `exports["./client"]`).
+    - id: mode-ui
+      name: '@dsh-plugin/dsh-mode-ui'
+      config: {}
 
     # WeChat (Tencent iLink) channel. Deliberately DISABLED for now — hermes
     # keeps the account (same iLink bot account is mutually exclusive; the
@@ -104,7 +115,7 @@
     # flip: set `enabled: true`, stop the hermes gateway first, and point
     # `stateDir` at hermes's `weixin/` dir to reuse its accounts/pairing data.
     - id: channel-wechat
-      name: 'file:///C:/Users/Vantage_XLST/Documents/dsh-plugin/plugin/dsh-channel-wechat/lib/index.js'
+      name: '@dsh-plugin/dsh-channel-wechat'
       config:
         enabled: false
         stateDir: 'C:/Users/Vantage_XLST/AppData/Local/hermes/weixin'
