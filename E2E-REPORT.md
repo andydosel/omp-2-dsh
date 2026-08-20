@@ -154,3 +154,78 @@
 - **B5(体验)**:`keepRecentTokens` 保护窗仍使新会话几乎无法手动进入审阅(本次复验沿用测试值 100;生产默认 20000 时需先扩充对话)。产品行为,未改。
 - **B6(dsh 文档)**:`packages/host/apiproxy/src/api/sessions.ts:317-321` 声称 `session.prompt` 拦截斜杠命令,实测不拦截(必须走 `commands/execute`)。上游文档问题,未改。
 - advisor 绑定目标仍为插件加载后**第一个**创建的 agent(本复验中为场景 1 的 compact 会话);如需按会话定向可配置 `agentId`。非阻塞。
+
+---
+
+## 修复记录(2026-08-21,A1:resume 断点修复)
+
+### A1 — monorepo mode-events annex:插件会话事件进入持久化目录
+
+- **问题**:`compact/mode`、`vibe/mode`、`advisor/status`、`wechat/channel` 四个 out-of-tree 会话事件不在
+  monorepo 生成的 `KNOWN_SESSION_EVENT_TYPES` 中,且 `Session.append` 无法给信封打 `ignorable: true`
+  (研究结论见 `RESEARCH-IGNORABLE-EVENTS.md`),因此凡用过这些模式的会话,resume 时整条日志被拒:
+  `SessionFormatUnsupportedError 'contains event type "vibe/mode" ... unknown to this harness and not marked ignorable'`
+  (mode-ui E2E 复现,会话 `session-c5a356c5…`)。
+- **修复路径 A1(用户批准的 plan-mode 先例)**:在 monorepo 内新增**类型专用 annex 包**
+  `packages/mode/mode-events/`(`@deepseek-ai/dsh-mode-events`,仅 `declare module '@deepseek-ai/dsh-session/types'`
+  的 `SessionEventMap` 合并 + 标准 invariant 伴生,无运行时代码),把四个事件的 payload 类型声明进
+  `packages/*/*/src/**/*.ts` 扫描范围,再跑生成器:
+  - `pnpm run gen-persistence-catalog` → 重写 `packages/core/session/src/known-event-types.ts`
+    (新增 `advisor/status`、`compact/mode`、`vibe/mode`、`wechat/channel` 四行)+ `docs/persistence-catalog.md`
+    (新增 `advisor/*`、`compact/*`、`vibe/*`、`wechat/*` 四个小节),diff 无任何无关改动;
+  - `pnpm run verify-persistence-catalog --check` 通过(目录新鲜);
+  - `pnpm run typecheck`(host+client)、`pnpm run build`(lib host/client + web)、`pnpm run constraints`、
+    `verify-built-package-invariants`(220 个伴生全过)全绿;
+  - tsconfig.host.json 加一行 project reference;pnpm-lock.yaml 增加新 importer。
+- **提交(monorepo fork 首个本地提交,本地身份 dsh-dev \<dsh-dev@local\>)**:
+  `6ad885bb22 feat: register plugin mode events in persistence catalog (mode-events annex)`
+  (仓库 `C:/Users/Vantage_XLST/Documents/dsh`;`git status` 干净,仅残留先前存在的未跟踪 `_envscan.ps1` 未纳入)。
+
+### resume 场景复验(真实 key,web profile HTTP RPC,port 5199)
+
+- **启动**:`node --import tsx/esm apps/cli/src/bin.ts --profile web --patch <abs profile-main/cordis.patch.yml>
+  --patch <abs .e2e-scratch/keeprecent.patch.yml> --port 5199`(keeprecent overlay 把 compact-mode 的
+  `keepRecentTokens` 置 100,与 08-18 复验一致;插件经 `~/.dsh/profiles/web` 按包名安装,mode-ui 已含)。
+- **驱动面**:`POST /api/session.create`、`session.prompt`(payload 形如
+  `{sessionId, mode:'queue', content:[{type:'text',text}]}`)、`session.history`(返回 `projections` 块)、
+  `commands/execute`(斜杠命令;`session.prompt` 不拦截 `/` 开头消息,仍须走 execute)。
+
+#### R1 — vibe/mode 会话 resume:PASS
+
+- 会话 `session-88bfac4c…`(standard-rw):`commands/execute "/vibe on"` → `"DIRECTOR mode on: toolset narrowed; …"`;
+  日志出现 `command/run`(seq 5)+ `vibe/mode {active:true}`(seq 6);`session.history` projections 块
+  `vibeMode {active:true}`。
+- **停服 → 重启(全新进程)→ 以同一 sessionId 读 history**:正常 LOAD(无 SessionFormatUnsupportedError),
+  `vibe/mode` 事件原样在日志中,projections `vibeMode {active:true}`(徽章 ON 由日志重放还原)。
+- **更强证据(修复前必失败的会话)**:mode-ui E2E 中因 `vibe/mode` 拒绝加载的既有会话
+  `session-c5a356c5-bf6a-4a90-b49f-bf30f466d624`(08-18 写入,旧目录时代)现在直接 resume:
+  asOfSeq 8,日志含 `vibe/mode {active:true}`(seq 7),projections `vibeMode {active:true}`。
+- **浏览器(headless Chromium)**:打开 `session-c5a356c5…` 会话,头部 utilities 徽章渲染
+  `COMPACT off · VIBE ON · ADVISOR off · WECHAT off` —— **VIBE 徽章为 ON**(由持久化日志折叠)。
+
+#### R2 — compact/mode 会话 resume:PASS
+
+- 会话 `session-5b22d052…`(standard-rw,cwd `.e2e-scratch`):`session.prompt` 真实模型回复后
+  `commands/execute "/compact"` → `"Compact mode active: the live loop is paused; …"`;
+  日志 `compaction/start`(seq 333)+ `compact/mode {active:true}`(seq 334);
+  `/compact_abort` → `"Compact mode off; the review tree was preserved. …"`;
+  `compact/mode {active:false}`(seq 340)+ `compaction/end`。
+- **停服 → 重启 → 同一 sessionId resume**:正常 LOAD,日志含两条 `compact/mode`(334 true / 340 false),
+  projections `compactMode {active:false}`(last-wins 折叠正确)。共 343 条事件全部可读。
+
+#### R3 — advisor + vibe off 常态:PASS
+
+- `/advisor on` → `"Advisor enabled. …"`;`/advisor status` → `"advisor: enabled"` +
+  `- default [session-88bfac4c…__advisor-default]: status=idle model=deepseek-v4-flash tokens=0`(reviewer 已挂载);
+  日志 `advisor/status {enabled:true, reviewers:1}` 与 projections `advisorStatus {enabled:true, reviewers:1}`。
+- `/vibe off` → `"Vibe mode off; workers parked."`;`vibe/mode {active:false}`(seq 16),
+  projections `vibeMode {active:false}`。
+- host 侧无回归:`session.create/prompt/history`、`commands/execute`(vibe/compact/advisor 全族)行为正常;
+  服务日志在全部 resume 路径上无任何 `SessionFormatUnsupportedError`。
+
+### 提交与状态
+
+- monorepo:`6ad885bb22`(A1 annex + 生成目录;已述)。
+- profile-main:`67a8a24`(docs:package-name install + resume note)。
+- doc:`docs: e2e resume fix record`(本修复记录,hash 见 doc 仓库 git log)。
+- 插件源码零改动(无真实 bug 暴露);`_envscan.ps1` 为先前遗留未跟踪文件,未纳入任何提交。
