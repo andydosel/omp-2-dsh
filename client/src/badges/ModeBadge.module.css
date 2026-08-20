@@ -1,0 +1,41 @@
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.badge,
+.badgeActive {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.badge {
+  color: var(--dsh-text-secondary, #8a8f98);
+  border-color: var(--dsh-border, rgba(128, 128, 128, 0.35));
+  background: transparent;
+}
+
+.badgeActive {
+  color: #b45309;
+  border-color: rgba(180, 83, 9, 0.55);
+  background: rgba(180, 83, 9, 0.1);
+}
+
+.badge:disabled,
+.badgeActive:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.error {
+  font-size: 11px;
+  color: #b91c1c;
+}

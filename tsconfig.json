@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "jsx": "react-jsx",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@dsh-plugin/dsh-compact-mode": ["../dsh-compact-mode/lib/index.d.ts"],
+      "@dsh-plugin/dsh-vibe-mode": ["../dsh-vibe-mode/lib/types/index.d.ts"],
+      "@dsh-plugin/dsh-advisor": ["../dsh-advisor/lib/index.d.ts"],
+      "@dsh-plugin/dsh-channel-wechat": ["../dsh-channel-wechat/lib/index.d.ts"],
+      "@deepseek-ai/dsh-session/types": ["./node_modules/@deepseek-ai/dsh-session/lib/types/types.d.ts"]
+    },
+    "rootDir": ".",
+    "outDir": "lib"
+  },
+  "include": ["src", "client/src"],
+  "exclude": ["tests", "lib", "node_modules"]
+}
