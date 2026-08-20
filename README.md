@@ -1,9 +1,9 @@
-# dsh profile-main — 插件集成 Profile(compact-mode + vibe-mode + read/write + advisor + wechat)
+# dsh profile-main — 插件集成 Profile(compact-mode + vibe-mode + read/write + advisor + wechat + mode-ui)
 
-把五个独立插件(dsh-compact-mode、dsh-vibe-mode、dsh-tool-read-write、
-dsh-advisor、dsh-channel-wechat)接入 DeepSeek Harness(dsh)的可运行 profile
+把六个独立插件(dsh-compact-mode、dsh-vibe-mode、dsh-tool-read-write、
+dsh-advisor、dsh-channel-wechat、dsh-mode-ui)接入 DeepSeek Harness(dsh)的可运行 profile
 补丁层。基于 `dsh-base` + `dsh-web-app` 两个 bundle 层,禁用其自带的
-`compaction-basic` / `command-compact` / `tool-fs`,插入五个插件。
+`compaction-basic` / `command-compact` / `tool-fs`,插入六个插件。
 
 ## 插件清单
 
@@ -13,13 +13,14 @@ dsh-advisor、dsh-channel-wechat)接入 DeepSeek Harness(dsh)的可运行 profil
 | dsh-vibe-mode | ✅ 启用 | DIRECTOR 调度模式 + `/vibe` 命令族 |
 | dsh-tool-read-write | ✅ 启用 | **替换** `@deepseek-ai/dsh-tool-fs` 全家:同名 `read`/`write`/`edit`/`read_image` + 新增 `inspect_image`(omp 风格选择器/归档/SQLite/URL 等) |
 | dsh-advisor | ✅ 启用 | 会话顾问:reviewer 子代理(read/grep/glob + `advise`),immuneTurns=3,syncBacklog=off |
+| dsh-mode-ui | ✅ 启用 | **模式状态 Web UI**:host 投影单元(fold `compact/mode`/`vibe/mode`/`advisor/status`/`wechat/channel`)+ 会话头部徽章(COMPACT/VIBE/ADVISOR/WECHAT) |
 | dsh-channel-wechat | ⛔ 停用 | 微信(iLink)渠道,`enabled: false` 挂载但不轮询。**hermes 仍持有账号**,激活步骤见下文 |
 
 ## 目录结构
 
-- `cordis.patch.yml` — 补丁层:禁用基座行 + 插入五个插件(含完整配置)+ web 默认 preset 选择
+- `cordis.patch.yml` — 补丁层:禁用基座行 + 插入六个插件(含完整配置)+ web 默认 preset 选择
 - `agent-presets/standard-rw/agent.cordis.yml` — **web 面 read/write 替换用的 preset 成品**(`standard` 去掉 `tool-fs` 行,见下)
-- `run.ps1` — Windows PowerShell 一键脚本:按依赖序构建六个项目,再启动 dsh web
+- `run.ps1` — Windows PowerShell 一键脚本:按依赖序构建七个项目,再启动 dsh web
 - `package.json` / `pnpm-workspace.yaml` — 作为独立 profile 安装到
   `~/.dsh/profiles/main/` 时所需(与官方 profile 目录结构一致)
 
@@ -28,8 +29,8 @@ dsh-advisor、dsh-channel-wechat)接入 DeepSeek Harness(dsh)的可运行 profil
 1. dsh monorepo 已 clone、已 `pnpm install`(参考仓库
    `C:\Users\Vantage_XLST\Documents\dsh`),Node ≥ 22。
 2. 插件工作区已 `pnpm install`(见下「tree-engine 如何被解析」)。
-3. **六个插件项目必须先构建**,顺序:tree-engine → compact-mode → vibe-mode
-   → tool-read-write → advisor → channel-wechat:
+3. **七个插件项目必须先构建**,顺序:tree-engine → compact-mode → vibe-mode
+   → tool-read-write → advisor → channel-wechat → mode-ui:
 
    ```powershell
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-tree-engine run build
@@ -38,11 +39,29 @@ dsh-advisor、dsh-channel-wechat)接入 DeepSeek Harness(dsh)的可运行 profil
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-tool-read-write run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-advisor run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-channel-wechat run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-mode-ui run build
    ```
 
-   `run.ps1` 会自动按该顺序构建再启动,不必手动执行上面六条。
+   `run.ps1` 会自动按该顺序构建再启动,不必手动执行上面七条。
 
-4. **(仅 web 面 read/write 替换)安装 `standard-rw` preset**,见下「web 面的
+4. **把插件按包名安装进 web profile**(一次性;`cordis.patch.yml` 的行现在用
+   **包名**而非 `file://` URL 引用插件 —— 包名解析基于 profile 目录的
+   `node_modules`,`dsh plugin --profile web add <abs path>` 会在
+   `~/.dsh/profiles/web/package.json` 写入 `link:` 依赖并安装):
+
+   ```powershell
+   cd C:\Users\Vantage_XLST\Documents\dsh
+   $plugins = 'dsh-tree-engine','dsh-compact-mode','dsh-vibe-mode','dsh-tool-read-write','dsh-advisor','dsh-channel-wechat','dsh-mode-ui'
+   foreach ($p in $plugins) { pnpm dsh plugin --profile web add "C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\$p" }
+   ```
+
+   包名形式是浏览器拿到我们的 client bundle 的前提(client-modules 按包名从
+   profile 目录解析每个 loader entry;`dsh-mode-ui` 声明 `dsh.client` +
+   `exports["./client"]`,所以它的行同时成为 web boot 入口)。
+   **重启规则**:Loader 对解析失败的包名会缓存负面结论(negative cache)。新增/
+   改名插件后第一次启动若报 `Cannot find module`/加载失败,必须**完整重启**
+   (旧进程的负面缓存不会自己失效),且任何声明变更都需要重启后才会生效。
+5. **(仅 web 面 read/write 替换)安装 `standard-rw` preset**,见下「web 面的
    read/write 替换」一节。patch 已把 web 默认 preset 指向 `standard-rw`,未安装
    时新建会话会响亮失败(报告可用 preset 列表)——这是刻意的 fail-loud 行为。
 
@@ -59,10 +78,10 @@ pnpm dsh --profile web --patch C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin
 
 - 被禁用的行:`compaction-basic`、`command-compact`、`tool-fs`(均带 `name:` 守卫 +
   `disabled: true`);
-- 新插入的行:`compact-mode`、`vibe-mode`(指向 `lib/types/index.js`)、
-  `tool-read-write`(指向 read/write 的 `lib/index.js`)、`advisor`(enabled +
-  defaultTools/immuneTurns/syncBacklog)、`channel-wechat`(`enabled: false` +
-  `stateDir` 指向 hermes 的 `weixin/`)、`agent-presets`(`default: standard-rw`)。
+- 新插入的行:`compact-mode`、`vibe-mode`、`tool-read-write`、`advisor`(enabled +
+  defaultTools/immuneTurns/syncBacklog)、`mode-ui`(config 空)、
+  `channel-wechat`(`enabled: false` + `stateDir` 指向 hermes 的 `weixin/`)、
+  `agent-presets`(`default: standard-rw`)。
 - 注意:dump 是离线组合,不含 `apps/cli/src/profile-boot.ts` 注入的 agent-presets
   `roots`(真实启动时该层会把 roster 钉到部署自带的 `config/agent-presets/`)。
 
@@ -150,42 +169,54 @@ Copy-Item -Recurse C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\profile-mai
 pnpm dsh --profile main          # 或 pnpm dsh --profile main --dump-config 验证
 ```
 
-注意:复制后 `cordis.patch.yml` 内插件的 `file:///C:/Users/Vantage_XLST/...` 绝对路径
-仍然有效(它们指向插件项目的构建产物,与 profile 位置无关);若插件项目换过路径,需
-同步修改 patch 中的 `name:`。web 默认 preset 行同样有效(`standard-rw` 仍需按上文
-装进 `~/.dsh/.agent-presets/`)。
+注意:复制后 `cordis.patch.yml` 内插件的 `name:` 是**包名**,解析基于目标 profile
+目录的 `node_modules` —— 用 `--profile main` 前需先在 `~/.dsh/profiles/main` 下
+执行与 web 相同的 `dsh plugin --profile main add <abs path>` 安装循环(见
+「前置条件」第 4 条),否则 Loader 找不到包。web 默认 preset 行同样有效
+(`standard-rw` 仍需按上文装进 `~/.dsh/.agent-presets/`)。
 
 ## 关键机制说明
 
-### Loader 如何解析 `name:`(Windows 必须用 file:// URL)
+### Loader 如何解析 `name:`(包名 + profile node_modules)
 
 dsh 的 Cordis Loader 对插入行执行 `import(name, baseUrl)`:
 
-- `@deepseek-ai/*` 等**包名**只从 dsh 安装自身与 `~/.dsh/profiles/node_modules`
-  解析(安装闭包),`@dsh-plugin/*` 不在此列 → 包名形式会失败;
+- **包名**(`@dsh-plugin/*` 等)从 **profile 目录的 `node_modules`** 解析
+  (安装闭包):`pnpm dsh plugin --profile web add <abs path>` 会把插件以
+  `link:` 依赖写进 `~/.dsh/profiles/web/package.json` 并安装,包名即命中。
+- `@deepseek-ai/*` 包名从 dsh 安装自身解析。
 - **相对路径**以 profile 目录(如 `~/.dsh/profiles/web`)为基准,而非 patch 文件目录;
-- **Windows 绝对路径**必须写成 `file:///C:/...` 形式:裸 `C:/...` 会被 Node 拒绝
-  (`ERR_UNSUPPORTED_ESM_URL_SCHEME: On Windows, absolute paths must be valid file:// URLs`)。
+- **Windows 绝对路径**必须写成 `file:///C:/...` 形式(旧版 patch 用过,现已全部
+  改为包名,不再需要)。
 
-因此本 patch 的 `name:` 使用指向构建产物 `lib/*.js` 的 `file:///` 绝对 URL
-(与官方教程「绝对路径挂载本地插件」一致的原理,Windows 下需要 URL 形式)。
 Loader 对 ESM 模块取 `exports.default ?? exports`:类默认导出
 (compact-mode/vibe-mode/advisor)与命名导出 `apply`+`Config`(read-write/wechat)
 两种形态都能直接作为插件。
 
 ### vibe-mode 的入口文件位置
 
-vibe-mode 的 tsconfig 把构建产物输出到 `lib/types/`(tsc -b),而 package.json 的
-`main`/`exports` 仍写着 `lib/index.js`(上游不一致)。因此 patch 指向实际的
-`lib/types/index.js`(构建后确认存在,默认导出 `VibeModeController`)。其余新插件
-(tree-engine/compact-mode/read-write/advisor/wechat)均确认存在 `lib/index.js` 且
-与 package.json `main` 一致。
+vibe-mode 的 tsconfig 把构建产物输出到 `lib/types/`(tsc -b),package.json 的
+`main`/`exports` 已指向 `lib/types/index.js`(已修正,与构建产物一致;默认导出
+`VibeModeController`)。其余插件均确认存在 `lib/index.js` 且与 package.json
+`main` 一致。
+
+### mode-ui 与 resume(持久化目录 annex)
+
+四个模式/渠道事件(`compact/mode`、`vibe/mode`、`advisor/status`、
+`wechat/channel`)由 out-of-tree 插件写入会话日志,dsh-mode-ui 的投影单元
+按会话折叠它们并驱动头部徽章。**2026-08-21 起**这些事件已通过 monorepo 的
+`packages/mode/mode-events`(类型专用 annex 包)注册进 harness 的持久化目录
+(`KNOWN_SESSION_EVENT_TYPES` + `docs/persistence-catalog.md`,由
+`pnpm run gen-persistence-catalog` 生成)——因此使用过这些模式的会话现在可以
+**从磁盘 resume**,不再抛 `SessionFormatUnsupportedError`。前提:monorepo 侧
+已合入 annex 提交并重新构建(参考仓库 `C:\Users\Vantage_XLST\Documents\dsh`,
+提交 `6ad885bb22`),插件侧无需改动。
 
 ### tree-engine 如何被解析
 
 compact-mode 的 `lib/index.js` 通过 `import('@dsh-plugin/tree-engine')` 使用树引擎。
-当 dsh 从 `file:///.../dsh-compact-mode/lib/index.js` 加载它时,Node 的 ESM 解析
-从 compact-mode 自己的 `node_modules` 向上查找,命中 pnpm workspace 软链
+当 dsh 从 profile 目录的包链接(`node_modules/@dsh-plugin/dsh-compact-mode`)加载它时,
+Node 的 ESM 解析从 compact-mode 自己的 `node_modules` 向上查找,命中 pnpm workspace 软链
 `dsh-compact-mode/node_modules/@dsh-plugin/tree-engine -> ../../dsh-tree-engine`。
 因此前提是**在插件工作区(`dsh-plugin/plugin`)执行过 `pnpm install`**——这会创建
 workspace 软链;若未安装,在该目录执行 `pnpm install` 即可。read-write/advisor/wechat
