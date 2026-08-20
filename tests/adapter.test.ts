@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { Config } from '../src/config.ts'
-import { WeChatAdapter } from '../src/adapter.ts'
+import { pickChannelSession, WeChatAdapter, type ChannelSessionSource } from '../src/adapter.ts'
 import type { WeChatSessionManager } from '../src/session-map.ts'
 import { ILinkClient } from '../src/ilink/client.ts'
 import { WeChatOutbound } from '../src/outbound.ts'
@@ -75,6 +76,7 @@ function makeHarness(
   overrides: Partial<Config> = {},
   fetchImpl?: ReturnType<typeof vi.fn>,
   outboundOverride?: WeChatOutbound,
+  ctxOverride?: { sessions?: ChannelSessionSource },
 ): Harness {
   const impl = fetchImpl ?? hangFetch()
   const client = new ILinkClient({
@@ -99,9 +101,12 @@ function makeHarness(
       splitMultilineMessages: false,
     },
   })
-  const sessionManager = { followup: vi.fn().mockResolvedValue(undefined) } as unknown as WeChatSessionManager
+  const sessionManager = {
+    followup: vi.fn().mockResolvedValue(undefined),
+    managedSessionIds: vi.fn((): string[] => []),
+  } as unknown as WeChatSessionManager
   const adapter = new WeChatAdapter({
-    ctx: {} as never,
+    ctx: (ctxOverride ?? {}) as never,
     config: config(overrides),
     client,
     accountStore: new AccountStore(accountsDir),
@@ -292,5 +297,56 @@ describe('state files written by the adapter', () => {
     expect(JSON.parse(readFileSync(join(dir, 'accounts', `${ACCOUNT}.sync.json`), 'utf-8'))['get_updates_buf']).toBe('SYNC-BUF')
     expect(JSON.parse(readFileSync(join(dir, 'accounts', `${ACCOUNT}.context-tokens.json`), 'utf-8')))
       .toEqual({ 'peer1@im.wechat': 'CT-m1' })
+  })
+})
+
+describe('pickChannelSession', () => {
+  function source(sessions: readonly Session[]): ChannelSessionSource {
+    return {
+      get: (id) => sessions.find(session => String(session.id) === id),
+      list: () => sessions,
+    }
+  }
+
+  it('prefers the channel’s most recent mapped session', () => {
+    const wechat = Session.create(SessionId('weixin:dm:peer1'))
+    const other = Session.create(SessionId('primary'))
+    const pick = pickChannelSession(source([wechat, other]), ['weixin:dm:peer1'])
+    expect(String(pick?.id)).toBe('weixin:dm:peer1')
+  })
+
+  it('falls back to the most recent live session when the channel has none', () => {
+    const first = Session.create(SessionId('a'))
+    const last = Session.create(SessionId('b'))
+    const pick = pickChannelSession(source([first, last]), [])
+    expect(String(pick?.id)).toBe('b')
+  })
+
+  it('returns undefined when no session can be chosen', () => {
+    expect(pickChannelSession(source([]), [])).toBeUndefined()
+    expect(pickChannelSession(undefined, [])).toBeUndefined()
+  })
+})
+
+describe('wechat/channel status event', () => {
+  it('appends connected on connect and disconnected on disconnect', async () => {
+    const session = Session.create(SessionId('primary'))
+    const { adapter } = makeHarness({}, undefined, undefined, {
+      sessions: { get: () => session, list: () => [session] },
+    })
+    adapter.connect()
+    let events = session.events.filter(event => event.type === 'wechat/channel')
+    expect(events).toHaveLength(1)
+    expect(events[0]!.data).toEqual({ connected: true, account: ACCOUNT })
+    await adapter.disconnect()
+    events = session.events.filter(event => event.type === 'wechat/channel')
+    expect(events.at(-1)!.data).toEqual({ connected: false, account: ACCOUNT })
+  })
+
+  it('skips the event without throwing when no session can carry it', async () => {
+    const { adapter } = makeHarness({}, undefined, undefined, { sessions: { get: () => undefined, list: () => [] } })
+    // connect() must not throw when there is nowhere to record the status.
+    adapter.connect()
+    expect(adapter.pollState.running).toBe(true)
   })
 })

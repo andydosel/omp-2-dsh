@@ -30,6 +30,7 @@ async function bootPlugin(config: Record<string, unknown>, provideCommands = tru
   ctx.provide('sessions', {
     get: () => undefined,
     create: () => undefined,
+    list: () => [],
   } as never)
   const commands = new Map<string, (raw: string) => Promise<unknown>>()
   if (provideCommands) {

@@ -27,6 +27,11 @@ import { join } from 'node:path'
 
 export { Config } from './config.ts'
 
+// The `wechat/channel` SessionEventMap merge lives in src/types.ts (its one
+// home); this re-export keeps the module edge in the emitted index.d.ts, so
+// aggregate programs consuming the declarations still receive the merge.
+export type * from './types.ts'
+
 export const name = 'dsh-channel-wechat'
 
 /** Services required by the plugin. */

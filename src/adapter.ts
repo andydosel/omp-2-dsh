@@ -7,7 +7,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.ts'
 import { resolveStateDir } from './config.ts'
 import { ILinkClient } from './ilink/client.ts'
@@ -67,6 +67,38 @@ export function chatIdFromSessionKey(sessionId: SessionId): string {
     return key.slice('weixin:dm:'.length)
   }
   return key
+}
+
+/** The sessions-service surface the channel needs to record its status. */
+export interface ChannelSessionSource {
+  get(id: string): Session | undefined
+  list(): readonly Session[]
+}
+
+/**
+ * Choose the session that records the channel-global `wechat/channel`
+ * status: the channel's own most recent mapped peer session if any, else the
+ * most recent live session, else none.
+ *
+ * Channel events are not per-session — the dsh event log is session-bound,
+ * so the status mirror lands on ONE session and the projection unit folds it
+ * per-session. Documented limitation: a session created after the last
+ * event has no mirror until the next connect/disconnect (a fresh session's
+ * badge reads the absent-key default).
+ */
+export function pickChannelSession(
+  source: ChannelSessionSource | undefined,
+  managed: readonly string[],
+): Session | undefined {
+  if (source === undefined) return undefined
+  for (let i = managed.length - 1; i >= 0; i--) {
+    const id = managed[i]
+    if (id === undefined) continue
+    const session = source.get(id)
+    if (session !== undefined) return session
+  }
+  const all = source.list()
+  return all.length > 0 ? all.at(-1) : undefined
 }
 
 /**
@@ -133,6 +165,7 @@ export class WeChatAdapter {
       this.pollState.running = false
       this.pollState.lastError = String(error)
     })
+    this.emitChannelEvent(true)
   }
 
   /** Stop the poll loop, flush debounce queues, cancel pending media (hermes `disconnect`). */
@@ -150,6 +183,24 @@ export class WeChatAdapter {
       this.pollTask = undefined
     }
     await this.drainPeerTails()
+    this.emitChannelEvent(false)
+  }
+
+  /**
+   * Append the whole-value `wechat/channel` mirror to the chosen session
+   * (see {@link pickChannelSession}). With no live session to record it,
+   * the event is skipped with a log line — the next connect/disconnect while
+   * a session exists emits. The account is the adapter's single iLink
+   * account (v1: one account per instance; a future multi-account adapter
+   * emits on switch).
+   */
+  private emitChannelEvent(connected: boolean): void {
+    const session = pickChannelSession(this.ctx.sessions, this.sessionManager.managedSessionIds())
+    if (session === undefined) {
+      this.log('wechat: no live session to record channel status; wechat/channel event skipped')
+      return
+    }
+    session.append('wechat/channel', { connected, account: this.accountId })
   }
 
   private async drainPeerTails(): Promise<void> {
