@@ -14,15 +14,45 @@ function waitForTurn(ctx: Context, registry: WorkerRegistry, childId: string, tu
 }
 
 describe('worker registry', () => {
-  it('registers a spawned worker with its expected first turn and counts dispatches', async () => {
+  it('exposes the running roster state across turns, seeding it on spawn before the firehose turn/start', async () => {
     const ctx = await setup(new MockSubagents())
-    const director = await agentWithSession(ctx, 'reg-director')
+    const director = await agentWithSession(ctx, 'roster-director')
     const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
-    registry.spawn(SessionId('w1'), 'fast', 'alpha', undefined)
-    expect(registry.get(SessionId('w1'))).toMatchObject({ tier: 'fast', label: 'alpha', lastTurn: 1, dispatched: 1 })
-    registry.send(SessionId('w1'), undefined)
-    expect(registry.get(SessionId('w1'))?.lastTurn).toBe(2)
-    expect(registry.get(SessionId('w1'))?.dispatched).toBe(2)
+    const child = Session.create(SessionId('w-roster'))
+    const lastRosterState = (): string | undefined => {
+      for (let i = director.session.events.length - 1; i >= 0; i--) {
+        const event = director.session.events[i]
+        if (event === undefined) continue
+        if (event.type !== 'vibe/workers') continue
+        if (typeof event.data !== 'object' || event.data === null || !('workers' in event.data)) continue
+        const workers = event.data.workers
+        if (!Array.isArray(workers)) continue
+        const first = workers[0]
+        if (first === null || typeof first !== 'object' || !('state' in first)) continue
+        return typeof first.state === 'string' ? first.state : undefined
+      }
+      return undefined
+    }
+    // Real race: startContinuable dispatches the child's first turn/start
+    // BEFORE registry.spawn registers the record, so the firehose listener
+    // misses it. Seeding from the live log must surface `running`, not
+    // 'starting' -> 'idle'.
+    child.append('turn/start', { turn: 1 })
+    registry.spawn(SessionId('w-roster'), 'good', 'roster-alpha', child.events)
+    expect(registry.get(SessionId('w-roster'))?.state).toBe('running')
+    expect(lastRosterState()).toBe('running')
+
+    // turn/end -> idle (and emits vibe/workers).
+    const end = child.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    ctx.emit('session/event', child, end)
+    expect(registry.get(SessionId('w-roster'))?.state).toBe('idle')
+    expect(lastRosterState()).toBe('idle')
+
+    // A second turn (vibe_send followup) -> running again.
+    const start2 = child.append('turn/start', { turn: 2 })
+    ctx.emit('session/event', child, start2)
+    expect(registry.get(SessionId('w-roster'))?.state).toBe('running')
+    expect(lastRosterState()).toBe('running')
     registry.dispose()
   })
 

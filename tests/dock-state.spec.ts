@@ -5,8 +5,8 @@
  * runs.
  */
 
+import { dockPresentation, hasRunningWorker, visibleWorkers } from '../client/src/dock/dock-state.ts'
 import { describe, expect, it } from 'vitest'
-import { hasRunningWorker, visibleWorkers } from '../client/src/dock/dock-state.ts'
 import type { VibeWorkerView } from '../src/types.ts'
 
 function worker(over: Partial<VibeWorkerView>): VibeWorkerView {
@@ -21,18 +21,19 @@ describe('dock state', () => {
     expect(hasRunningWorker([])).toBe(false)
   })
 
-  it('visibleWorkers hides dead rows under the default 隐藏已完成 filter and keeps every other state', () => {
+  it('dockPresentation: no roster renders nothing; the default collapse is a header-only slim bar', () => {
     const roster = [
       worker({ id: 'a', state: 'starting' }),
       worker({ id: 'b', state: 'running' }),
-      worker({ id: 'c', state: 'idle' }),
-      worker({ id: 'd', state: 'parked' }),
       worker({ id: 'e', state: 'dead' }),
     ]
-    expect(visibleWorkers(roster, true).map(w => w.id)).toEqual(['a', 'b', 'c', 'd'])
-    // Toggled off: everything shows.
-    expect(visibleWorkers(roster, false).map(w => w.id)).toEqual(['a', 'b', 'c', 'd', 'e'])
-    // Empty roster renders nothing either way.
-    expect(visibleWorkers([], true)).toEqual([])
+    // No workers -> render nothing (no vertical space).
+    expect(dockPresentation([], true, true)).toEqual({ render: false, headerOnly: false, rows: [] })
+    // Default collapse: header-only, rows hidden.
+    const collapsed = dockPresentation(roster, true, true)
+    expect(collapsed).toEqual({ render: true, headerOnly: true, rows: [] })
+    // Expanded: rows under the 隐藏已完成 filter (dead row hidden behind the header-only state).
+    const expanded = dockPresentation(roster, true, false)
+    expect(expanded).toEqual({ render: true, headerOnly: false, rows: [worker({ id: 'a', state: 'starting' }), worker({ id: 'b', state: 'running' })] })
   })
 })

@@ -1,3 +1,5 @@
+/* Collapsed (default): a slim header bar — near-zero vertical space so the
+   dock never obstructs the chat transcript until the user opens it. */
 .dock {
   display: flex;
   flex-direction: column;
@@ -8,16 +10,67 @@
   background: var(--dsh-surface, rgba(255, 255, 255, 0.04));
 }
 
+.dockCollapsed {
+  padding: 4px 8px;
+  gap: 0;
+}
+
 .header {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .title {
   font-size: 12px;
   font-weight: 600;
   color: var(--dsh-text-secondary, #888);
+}
+
+.count {
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 16px;
+  color: var(--dsh-text-secondary, #888);
+  background: var(--dsh-border, rgba(128, 128, 128, 0.2));
+}
+
+.chevron {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--dsh-text-secondary, #888);
+  border-bottom: 1.5px solid var(--dsh-text-secondary, #888);
+  /* Expanded: points down ("click to collapse"). */
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.chevronUp {
+  /* Collapsed: points up ("click to expand"). */
+  transform: rotate(225deg);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .filter,

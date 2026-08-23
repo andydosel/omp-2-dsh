@@ -93,6 +93,29 @@ export interface WaitForTurnOptions {
   readonly onSettled?: () => void
 }
 
+/** Whether the child log holds an open turn (turn/start without its closing turn/end). */
+function hasOpenTurn(events: readonly SessionEvent[]): boolean {
+  let open = false
+  for (const event of events) {
+    if (event.type === 'turn/start') open = true
+    else if (event.type === 'turn/end') open = false
+  }
+  return open
+}
+
+/**
+ * The roster state a worker should carry the moment the registry first
+ * registers it (the `vibe_spawn`/`vibe_send` race: the child begins its turn
+ * BEFORE the tool handler registers the record, so the `turn/start` firehose
+ * event is already past and the firehose listener misses it). Seed from the
+ * child's live log: an open turn means it is already running; a closed turn
+ * means it is idle; nothing logged means it is still starting.
+ */
+function seedState(events: readonly SessionEvent[] | undefined): VibeWorkerState {
+  if (events === undefined || events.length === 0) return 'starting'
+  if (hasOpenTurn(events)) return 'running'
+  return completedTurnsOf(events) > 0 ? 'idle' : 'starting'
+}
 /** Count completed turns in a child's session log (turn/end events). */
 export function completedTurnsOf(events: readonly SessionEvent[]): number {
   let completed = 0
@@ -211,7 +234,7 @@ export class WorkerRegistry {
       label,
       lastTurn: initialEvents === undefined ? 1 : completedTurnsOf(initialEvents) + 1,
       dispatched: 1,
-      state: 'starting',
+      state: seedState(initialEvents),
       lastActivity: new Date().toISOString(),
     }
     this.workers.set(childId, record)
@@ -238,7 +261,7 @@ export class WorkerRegistry {
       label: 'vibe worker',
       lastTurn: liveEvents === undefined ? 1 : completedTurnsOf(liveEvents) + 1,
       dispatched: 1,
-      state: 'starting',
+      state: seedState(liveEvents),
       lastActivity: new Date().toISOString(),
     }
     this.workers.set(childId, record)

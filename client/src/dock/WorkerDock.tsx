@@ -6,6 +6,12 @@
  * that worker's session (`ctx.sessions.open`); when the current session IS a
  * worker session the dock shows a "返回主会话" button back to the director.
  *
+ * The dock is COLLAPSED by default (QueueDock/TodoPanel posture): it renders
+ * a slim header bar (title + live-count badge + chevron) that takes
+ * near-zero vertical space so it never obstructs the chat transcript; the
+ * full list, the hide-completed filter, and the waiting hint appear only
+ * when the user expands it.
+ *
  * Waiting indicator (presentational only — wait behavior is host-side): any
  * `running` worker carries an extra animated spinner distinct from the plain
  * running dot, and while at least one worker runs the dock footer shows
@@ -21,7 +27,7 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the vibeWorkers SessionProjectionMap merge.
 import type {} from '../../../src/types.ts'
 import type { VibeWorkerState, VibeWorkerView } from '../../../src/types.ts'
-import { hasRunningWorker, visibleWorkers } from './dock-state.ts'
+import { dockPresentation, hasRunningWorker } from './dock-state.ts'
 import styles from './WorkerDock.module.css'
 
 /** Extra props the dock entry injects. */
@@ -73,14 +79,17 @@ function WorkerRow({ worker, open }: { worker: VibeWorkerView; open: () => void 
 
 /**
  * Dock panel. Renders nothing when the current session carries no roster
- * (non-vibe sessions); on the director session it lists workers and records
- * the director id on the panel state; on a worker session (its id matches a
- * roster row) it offers "返回主会话" back to the remembered director.
+ * (non-vibe sessions) — so it takes no vertical space when unused; it is
+ * COLLAPSED by default (a slim header), and on the director session it lists
+ * workers and records the director id on the panel state; on a worker
+ * session (its id matches a roster row) it offers "返回主会话" back to the
+ * remembered director.
  */
 export function WorkerDock({ useProjection, sessionId, openSession, parentOf, rememberedDirector, rememberDirector }: WorkerDockProps): JSX.Element | null {
   const projection = useProjection('vibeWorkers')
   const workers = projection?.workers ?? []
   const [hideDone, setHideDone] = useToggle(true)
+  const [collapsed, setCollapsed] = useToggle(true)
 
   const isWorkerSession = workers.some(worker => worker.id === sessionId)
 
@@ -90,37 +99,51 @@ export function WorkerDock({ useProjection, sessionId, openSession, parentOf, re
     if (!isWorkerSession && workers.length > 0) rememberDirector(sessionId)
   }, [isWorkerSession, workers.length, sessionId, rememberDirector])
 
-  if (workers.length === 0) return null
+  const { render, headerOnly, rows } = dockPresentation(workers, hideDone, collapsed)
+  if (!render) return null
 
-  const visible = visibleWorkers(workers, hideDone)
   const anyRunning = hasRunningWorker(workers)
   const directorId = isWorkerSession
     ? (parentOf(sessionId) ?? rememberedDirector())
     : undefined
 
   return (
-    <div className={styles.dock}>
-      <div className={styles.header}>
+    <div className={collapsed ? `${styles.dock} ${styles.dockCollapsed}` : styles.dock} data-vibe-dock="">
+      <button
+        type="button"
+        className={styles.header}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? '展开 Vibe workers' : '收起 Vibe workers'}
+        onClick={() => setCollapsed(!collapsed)}
+      >
         <span className={styles.title}>Vibe workers</span>
-        <button type="button" className={styles.filter} onClick={() => setHideDone(!hideDone)} aria-pressed={hideDone}>
-          {hideDone ? '隐藏已完成' : '显示已完成'}
-        </button>
-        {directorId !== undefined && (
-          <button type="button" className={styles.back} onClick={() => openSession(directorId)}>
-            返回主会话
-          </button>
-        )}
-      </div>
-      {visible.length > 0 ? (
-        <div className={styles.rows}>
-          {visible.map(worker => (
-            <WorkerRow key={worker.id} worker={worker} open={() => openSession(worker.id)} />
-          ))}
+        <span className={styles.count}>{workers.length}</span>
+        <span className={`${styles.chevron}${collapsed ? ` ${styles.chevronUp}` : ''}`} aria-hidden="true" />
+      </button>
+      {!headerOnly && (
+        <div className={styles.panel}>
+          <div className={styles.tools}>
+            <button type="button" className={styles.filter} onClick={() => setHideDone(!hideDone)} aria-pressed={hideDone}>
+              {hideDone ? '隐藏已完成' : '显示已完成'}
+            </button>
+            {directorId !== undefined && (
+              <button type="button" className={styles.back} onClick={() => openSession(directorId)}>
+                返回主会话
+              </button>
+            )}
+          </div>
+          {rows.length > 0 ? (
+            <div className={styles.rows}>
+              {rows.map(worker => (
+                <WorkerRow key={worker.id} worker={worker} open={() => openSession(worker.id)} />
+              ))}
+            </div>
+          ) : (
+            <div className={styles.empty}>所有 worker 均已完成</div>
+          )}
+          {anyRunning && <div className={styles.hint}>等待 worker 完成,你可随时发言</div>}
         </div>
-      ) : (
-        <div className={styles.empty}>所有 worker 均已完成</div>
       )}
-      {anyRunning && <div className={styles.hint}>等待 worker 完成,你可随时发言</div>}
     </div>
   )
 }
