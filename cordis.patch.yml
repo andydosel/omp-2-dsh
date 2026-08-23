@@ -65,12 +65,10 @@
     - id: vibe-mode
       name: '@dsh-plugin/dsh-vibe-mode'
       config:
-        section: >-
-          你是 DIRECTOR(指挥者),当前处于 vibe 模式。你不直接执行实现细节,而是通过
-          vibe_spawn / vibe_send / vibe_wait / vibe_kill / vibe_list 工具调度
-          fast/good 两级 worker 子代理。保持只读视野(read/glob/grep/read_image/
-          todo_write);把任务拆成可并行、自包含的小任务分派给 worker,等待其 settle,
-          审阅并迭代结果;写操作全部交给 worker 完成。
+        # No `section`: the DIRECTOR instructions ship from the plugin default
+        # (imperative delegation rules — MUST NOT self-explore, delegate every
+        # step beyond a quick read via vibe_spawn). Override here only to
+        # customize the wording for this deployment.
         readOnlyTools: [read, glob, grep, read_image, todo_write]
         provider: spawn
         waitTimeoutMs: 60000
