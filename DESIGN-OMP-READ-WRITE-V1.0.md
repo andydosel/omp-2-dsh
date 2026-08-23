@@ -133,7 +133,7 @@ plugin/dsh-tool-read-write/
 3. **URL 分支进 read v1**:自带 node fetch + 基础 HTML→text(推荐)vs v1 不做 URL、改用开启 web_fetch 行? —— ✅ 确认(自带 fetch + 基础 HTML→text)
 4. **SQLite 实现**:Node 24 内置 `node:sqlite`(零依赖,推荐;需验证可用性)vs `better-sqlite3`(原生编译)。 —— ✅ 确认(node:sqlite;实现时验证可用性,不行 fallback better-sqlite3)
 5. **归档实现**:`node:zlib` + 自写 tar 解析(轻,推荐 v1)vs 引 tar/zip 库。ZIP 用 zlib inflate + 自解析中央目录。 —— ✅ 确认(zlib + 自写 tar/zip 解析)
-6. **内部 URL**(`agent://`/`skill://`/`history://` 等):v1 不做(dsh 已有 session-query/skill 工具覆盖),确认? —— ✅ 确认(v1 不做内部 URL)
+6. **内部 URL**(`agent://`/`skill://`/`history://` 等):v1 不做(dsh 已有 session-query/skill 工具覆盖),确认? —— ✅ 确认(按推荐)**,但用户决策反转:实现 `read agent://<sessionId>`(worker 会话转录)提前到 v1,其余内部 URL 仍 v1.2**
 7. **`:conflicts` + conflict:// 写**:v1.2(需先做冲突扫描),确认? —— ✅ 确认(v1.2 做 conflicts)
 8. **文档/notebook 转换**:v1.2+(依赖 pdf/docx 转换库,重),确认? —— ✅ 确认(v1.2+ 做文档/notebook)
 9. **inspect_image 作为第五工具加入 v1** —— ✅ 已确认(用户拍板)。
@@ -154,3 +154,4 @@ plugin/dsh-tool-read-write/
 - **v1.0**(2026-08-17):初始设计,等待拍板点确认。
 - **v1.1**(2026-08-17):新增第五工具 inspect_image(图片+问题→视觉模型→文字分析);拍板点 9 确认。
 - **v1.2**(2026-08-17):拍板点 1–8 全部确认(按推荐);inspect_image 视觉路由前提注明(需配置 visionProvider/visionModel,否则该工具不可用)。
+- **v1.3**(2026-08-21):内部 URL 决策更新——`agent://` 提前进 v1(worker 信息查询走 read,遵循 omp 理念,不新开查询工具)。

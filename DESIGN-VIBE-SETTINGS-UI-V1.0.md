@@ -1,6 +1,6 @@
-# 设计文档 v1.0:vibe DIRECTOR 指令设置页
+# 设计文档 v1.1:vibe DIRECTOR 指令设置页
 
-> 状态:设计草案,等待拍板点确认后开发
+> 状态:设计定稿(拍板点全部确认),开发中
 > 依据:`RESEARCH-VIBE-SETTINGS.md`(证据 file:line);dsh settings seam 调研
 > 原则:一切以插件形式实现;涉及核心改动或非插件实现先提醒用户(本方案含 **monorepo +1 行**,已明示)
 
@@ -39,12 +39,12 @@
 ### 3.4 泛化(后续)
 - 每插件一个 namespace 是 dsh 惯例;advisor 有 `instructions` 字段可同机制套用;compact-mode 文本目前硬编码(先加字段再套用)。
 
-## 4. 拍板点(待确认)
+## 4. 拍板点(全部确认)
 
-1. **monorepo +1 行**(api-proxy.ts 白名单加 `'dsh-vibe-mode'`):A1 annex 同类的极小核心文件改动——确认?(推荐确认,无此改客户端无法读写设置)
-2. **面板入口**:设置页左侧导航项(推荐,`settings.section` 槽)vs VIBE 徽章点击弹窗。
-3. **保存语义**:textarea + 保存按钮 + 冲突提示(推荐)vs 自动保存(每击键 debounce)。
-4. **默认值回退**:设置未修改时用 config 的 `section`(推荐);修改后热生效,config 不再覆盖。
+1. **monorepo +1 行**(api-proxy.ts 白名单加 `'dsh-vibe-mode'`):A1 annex 同类的极小核心文件改动——确认?(推荐确认,无此改客户端无法读写设置)—— ✅ 确认(monorepo +1 行,已批准)
+2. **面板入口**:设置页左侧导航项(推荐,`settings.section` 槽)vs VIBE 徽章点击弹窗。—— ✅ 确认
+3. **保存语义**:textarea + 保存按钮 + 冲突提示(推荐)vs 自动保存(每击键 debounce)。—— ✅ 确认
+4. **默认值回退**:设置未修改时用 config 的 `section`(推荐);修改后热生效,config 不再覆盖。—— ✅ 确认
 
 ## 5. 风险
 
@@ -60,5 +60,5 @@
 - 真实浏览器:设置页出现 "Vibe 指令" 面板,编辑保存生效。
 
 ## 7. 变更记录
-
 - **v1.0**(2026-08-21):初始设计,等待拍板点确认。
+- **v1.1**(2026-08-21):拍板点 1–4 全部确认(按推荐)。
