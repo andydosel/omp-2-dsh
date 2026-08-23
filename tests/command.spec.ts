@@ -17,6 +17,7 @@ async function runVibe(ctx: Context, agent: Agent, line: string) {
     agent,
     rawInput: line,
     commandId: CommandId('cmd-test'),
+    attachments: [],
     signal: new AbortController().signal,
   })
 }

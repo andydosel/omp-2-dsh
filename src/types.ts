@@ -6,6 +6,7 @@
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import z from '@deepseek-ai/schemastery'
 
 /** The two worker tiers a director can spawn. */
 export type VibeTier = 'fast' | 'good'
@@ -16,6 +17,86 @@ export interface TierConfig {
   provider?: string
   /** Model id interpreted by the selected provider adapter. */
   model?: string
+}
+
+/**
+ * The live state of one vibe worker as the `vibe/workers` roster reports it.
+ * `starting` = freshly spawned, first turn not yet opened; `running` = a turn
+ * is open; `idle` = last turn completed, awaiting a followup; `parked` =
+ * interrupted (vibe_kill or `/vibe off`), session preserved; `dead` =
+ * hard-destroyed (drain/terminate), kept in the roster for the client's
+ * "hide completed" filter.
+ */
+export type VibeWorkerState = 'starting' | 'running' | 'idle' | 'parked' | 'dead'
+
+/** One row of the `vibe/workers` whole-value roster (wire JSON). */
+export interface VibeWorkerView {
+  /** Durable child session id, stable across activations. */
+  id: string
+  /** Spawn label (the worker's session label). */
+  name?: string
+  /** The tier the director spawned it under. */
+  tier: VibeTier
+  /** Live state as of the last registry transition. */
+  state: VibeWorkerState
+  /** The expected absolute turn of the most recently dispatched message. */
+  turn: number
+  /** ISO timestamp of the last state transition. */
+  lastActivity?: string
+}
+
+/** The whole-value payload of the `vibe/workers` session event. */
+export interface VibeWorkersProjection {
+  workers: VibeWorkerView[]
+}
+
+/**
+ * The schemastery schema resolving the `dsh-vibe-mode` settings namespace,
+ * shaped like {@link VibeModeConfig}: the settings layer overrides the
+ * composition config (the plugin's own config is the `base` fallback), and
+ * the runtime DIRECTOR-instructions source is
+ * `resolved.section ?? config.section ?? DEFAULT_DIRECTOR_SECTION`. The
+ * client settings panel can only touch this namespace because the host's
+ * api-proxy whitelist exposes it (added by the annex worker); without that
+ * whitelist entry every read/write answers `settings-not-exposed`.
+ */
+export const VibeModeConfigSchema: z<VibeModeConfig> = z.object({
+  section: z.string(),
+  readOnlyTools: z.array(z.string()),
+  provider: z.string(),
+  tiers: z.object({
+    fast: z.object({ provider: z.string(), model: z.string() }),
+    good: z.object({ provider: z.string(), model: z.string() }),
+  }),
+  waitTimeoutMs: z.number(),
+  maxWaitTimeoutMs: z.number(),
+  maxConsecutiveWakes: z.number(),
+})
+
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionMap {
+    /** The director's live worker roster, folded from `vibe/workers` whole-value events. */
+    vibeWorkers: VibeWorkersProjection
+  }
+}
+
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    /**
+     * Whether DIRECTOR mode is in force from this point on: log-only,
+     * non-surface, whole-value replace. The last `vibe/mode` wins; a log with
+     * none folds to inactive through {@link foldVibeMode}.
+     */
+    'vibe/mode': { active: boolean }
+    /**
+     * The director's live worker roster: log-only, non-surface, whole-value
+     * replace, appended whenever the registry changes (spawn, send, kill,
+     * turn-start/turn-end transitions, mode exit). Folds into the
+     * `vibeWorkers` projection; the persistence catalog entry for this type
+     * lives in the monorepo annex (added by the parallel annex worker).
+     */
+    'vibe/workers': { workers: VibeWorkerView[] }
+  }
 }
 
 /**

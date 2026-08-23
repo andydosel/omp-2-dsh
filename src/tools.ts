@@ -11,6 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ResolvedVibeModeConfig, VibeTier } from './types.ts'
@@ -38,6 +39,21 @@ function requireDirector(exec: { agent?: Agent }): Agent {
     throw new Error('vibe tools require a calling agent (exec.agent was undefined)')
   }
   return exec.agent
+}
+
+/**
+ * Whether a `user/message` event appended to the DIRECTOR session should
+ * interrupt an in-flight `vibe_wait`: a genuine user message, or a notice
+ * from any plugin OTHER than vibe-mode itself. The plugin's own narrations
+ * (`agent.inject` notices) never interrupt a wait; completion self-delivery
+ * steers land in the inbox, not the log, so they cannot interrupt either.
+ */
+function isWaitInterruptingMessage(event: {
+  readonly data: { readonly source: { readonly kind: string; readonly plugin?: string } }
+}): boolean {
+  const source = event.data.source
+  if (source.kind === 'plugin' && source.plugin === 'vibe-mode') return false
+  return true
 }
 
 /**
@@ -135,11 +151,13 @@ export function defineVibeTools(
 
   const wait = defineTool({
     name: 'vibe_wait',
-    description: 'Wait for worker results: block until the named vibe workers finish their current turn, returning each worker\'s final reply. '
+    description: 'Wait for worker results: wait until the named vibe workers finish their current turn, returning each worker\'s final reply. '
       + 'Use this after vibe_spawn/vibe_send to collect what your workers produced. '
       + 'With no `sessions`, waits for every worker this director spawned. '
       + 'Each result reports the completed turn number, its status (completed/timeout/aborted/disposed), '
-      + 'and the worker\'s final output text. A timed-out wait returns [status: timeout] and leaves the worker running.',
+      + 'and the worker\'s final output text. A timed-out wait returns [status: timeout] and leaves the worker running. '
+      + 'Each wait is bounded by the timeout; a user message arriving while waiting resolves the call early '
+      + 'with state=waiting/interrupted — the completion self-delivers as a notice later.',
     parameters: {
       sessions: {
         type: 'array',
@@ -156,10 +174,16 @@ export function defineVibeTools(
         type: 'object',
         additionalProperties: false,
         properties: {
-          results: { type: 'array', required: true, items: TURN_END_RESULT_SCHEMA },
+          state: { type: 'string', required: true, enum: ['completed', 'waiting'] },
+          results: { type: 'array', items: TURN_END_RESULT_SCHEMA },
+          interrupted: { type: 'boolean' },
+          note: { type: 'string' },
         },
       },
       render: (_args, value) => {
+        if (value.state === 'waiting') {
+          return textBlock(`[vibe_wait interrupted] ${value.note ?? 'user message arrived'}`)
+        }
         const lines = (value.results as Array<{ session: string; turn: number; status: string; output?: string }>)
           .map(result => result.output !== undefined
             ? `[${result.session} turn ${result.turn} ${result.status}] ${result.output}`
@@ -168,6 +192,7 @@ export function defineVibeTools(
       },
     },
     async execute(args, exec) {
+      const director = requireDirector(exec)
       const timeout = Math.min(args.timeout ?? waitDefault, waitCap)
       const sessions: SessionId[] = Array.isArray(args.sessions) && args.sessions.length > 0
         ? args.sessions.map((id: string) => id as SessionId)
@@ -175,18 +200,56 @@ export function defineVibeTools(
       if (sessions.length === 0) {
         throw new Error('vibe_wait: no workers to wait for — spawn one with vibe_spawn first')
       }
-      const results = await Promise.all(sessions.map(async (childId) => {
-        const record = registry.get(childId)
-        if (record === undefined) {
-          throw new Error(`vibe_wait: unknown worker session ${childId} — spawn or send to it first`)
+      // The bounded first poll races each worker's turn/end against the
+      // timeout AND a user/message event for the DIRECTOR session: a user
+      // message resolves the whole wait early (interrupted) and the
+      // completion still self-delivers later (the interrupted waiters are
+      // removed, so the turn-end steer fires).
+      const controller = new AbortController()
+      const offInterrupt = ctx.on('session/event', (session, event) => {
+        if (session.id !== director.id) return
+        if (event.type !== 'user/message') return
+        if (!isWaitInterruptingMessage(event as never)) return
+        controller.abort('user message arrived')
+      })
+      const onExecAbort = (): void => {
+        controller.abort(exec.signal.reason ?? 'tool aborted')
+      }
+      if (exec.signal.aborted) {
+        onExecAbort()
+      } else {
+        exec.signal.addEventListener('abort', onExecAbort, { once: true })
+      }
+      try {
+        const results = await Promise.all(sessions.map(async (childId) => {
+          const record = registry.get(childId)
+          if (record === undefined) {
+            throw new Error(`vibe_wait: unknown worker session ${childId} — spawn or send to it first`)
+          }
+          const target = record.lastTurn
+          return registry.waitForTurn(childId, target, () => childSessionEvents(ctx, childId), {
+            timeoutMs: timeout,
+            signal: controller.signal,
+          })
+        }))
+        return { state: 'completed' as const, results }
+      } catch (error) {
+        // A real tool abort (the director's turn was cancelled) rethrows; a
+        // user-message interrupt resolves early instead.
+        if (!exec.signal.aborted && controller.signal.aborted) {
+          const pending = sessions
+            .map(childId => registry.get(childId))
+            .filter((record): record is NonNullable<typeof record> => record !== undefined)
+          const note = pending.length <= 1
+            ? `user message arrived; you will be notified when worker ${pending[0]?.label ?? 'the worker'} completes`
+            : 'user message arrived; you will be notified when the workers complete'
+          return { state: 'waiting' as const, interrupted: true as const, note }
         }
-        const target = record.lastTurn
-        return registry.waitForTurn(childId, target, () => childSessionEvents(ctx, childId), {
-          timeoutMs: timeout,
-          signal: exec.signal,
-        })
-      }))
-      return { results }
+        throw error
+      } finally {
+        offInterrupt()
+        exec.signal.removeEventListener('abort', onExecAbort)
+      }
     },
   })
 
@@ -211,6 +274,7 @@ export function defineVibeTools(
     async execute(args, exec) {
       const director = requireDirector(exec)
       ctx.subagents.interrupt(args.session as SessionId, { kind: 'ancestor', agent: director })
+      registry.park(args.session as SessionId)
       return { parked: true }
     },
   })

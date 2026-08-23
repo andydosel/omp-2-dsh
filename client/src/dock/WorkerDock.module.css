@@ -1,0 +1,168 @@
+.dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.3));
+  border-radius: 8px;
+  background: var(--dsh-surface, rgba(255, 255, 255, 0.04));
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsh-text-secondary, #888);
+}
+
+.filter,
+.back {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.3));
+  background: transparent;
+  color: var(--dsh-text, #ccc);
+  cursor: pointer;
+}
+
+.filter {
+  margin-left: auto;
+}
+
+.rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 5px;
+  border-radius: 6px;
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.25));
+  background: var(--dsh-surface, rgba(255, 255, 255, 0.05));
+  color: var(--dsh-text, #ddd);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.row:hover {
+  background: var(--dsh-surface-hover, rgba(255, 255, 255, 0.1));
+}
+
+.name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stateIcon {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.stateStarting {
+  background: #999;
+  animation: dshVibePulse 1.2s ease-in-out infinite;
+}
+
+.stateRunning {
+  background: #4a9eff;
+}
+
+.stateIdle {
+  background: #999;
+}
+
+.stateParked {
+  background: #e6b800;
+}
+
+.stateDead {
+  background: #e5484d;
+}
+
+/* Distinct animated cue for an AWAITED worker: a ring spinner around the dot.
+   Keyed by id:turn in JSX so the animation never restarts on re-render. */
+.waitingSpinner {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: #4a9eff;
+  animation: dshVibeSpin 0.9s linear infinite;
+}
+
+@keyframes dshVibeSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dshVibePulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.tierChip {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  line-height: 14px;
+}
+
+.tierFast {
+  background: rgba(74, 158, 255, 0.18);
+  color: #7ab8ff;
+}
+
+.tierGood {
+  background: rgba(168, 130, 255, 0.18);
+  color: #c4a8ff;
+}
+
+.turn {
+  font-size: 10px;
+  color: var(--dsh-text-secondary, #888);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--dsh-text-secondary, #888);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hint::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4a9eff;
+  animation: dshVibePulse 1.2s ease-in-out infinite;
+}
+
+.empty {
+  font-size: 11px;
+  color: var(--dsh-text-secondary, #888);
+  padding: 2px 0;
+}

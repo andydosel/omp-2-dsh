@@ -54,9 +54,19 @@ export interface DirectorScope {
  * @param ctx - plugin root ctx (services resolve through `agent.ctx`).
  * @param agent - the director to narrow.
  * @param config - validated deployment config.
+ * @param sectionSource - live DIRECTOR-instructions text; defaults to the
+ *   frozen config, and the controller swaps in the settings-backed thunk
+ *   (settings override → config → shipped default) once the settings seam
+ *   is attached. Re-evaluated per prompt assembly, so a settings change
+ *   reaches the very next request without restart or re-entry.
  * @returns the composite scope with its unified disposer.
  */
-export function applyDirectorScope(ctx: Context, agent: Agent, config: ResolvedVibeModeConfig): DirectorScope {
+export function applyDirectorScope(
+  ctx: Context,
+  agent: Agent,
+  config: ResolvedVibeModeConfig,
+  sectionSource: () => string = () => config.section,
+): DirectorScope {
   const disposers: Array<() => void> = []
   const registry = new WorkerRegistry(ctx, agent, config.maxConsecutiveWakes)
 
@@ -98,7 +108,7 @@ export function applyDirectorScope(ctx: Context, agent: Agent, config: ResolvedV
       order: DIRECTOR_SECTION_ORDER,
       text: (context) => {
         const subject = context.agent ?? agent
-        return foldVibeMode(subject.session.events) ? config.section : ''
+        return foldVibeMode(subject.session.events) ? sectionSource() : ''
       },
     }))
     // 5. The delegation-loop tool guidance, fold-driven with the same state:

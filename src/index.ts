@@ -14,18 +14,7 @@
  */
 
 import VibeModeController from './mode.ts'
-import { foldVibeMode } from './types.ts'
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /**
-     * Whether DIRECTOR mode is in force from this point on: log-only,
-     * non-surface, whole-value replace. The last `vibe/mode` wins; a log with
-     * none folds to inactive through {@link foldVibeMode}.
-     */
-    'vibe/mode': { active: boolean }
-  }
-}
+import type { VibeWorkerView } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

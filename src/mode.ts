@@ -17,9 +17,22 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { ZodType } from 'zod'
+import { z as zod } from 'zod'
 // Type-only edge: resolves `ctx.commands` for the command child.
 import type {} from '@deepseek-ai/dsh-commands'
-import { foldVibeMode, resolveConfig, type ResolvedVibeModeConfig, type VibeModeConfig } from './types.ts'
+// Type-only edge: resolves `ctx.sessionProjections` for the projection unit.
+import type {} from '@deepseek-ai/dsh-session-projection'
+import {
+  DEFAULT_DIRECTOR_SECTION,
+  foldVibeMode,
+  resolveConfig,
+  VibeModeConfigSchema,
+  type ResolvedVibeModeConfig,
+  type VibeModeConfig,
+  type VibeWorkersProjection,
+} from './types.ts'
 import { applyDirectorScope, type DirectorScope } from './director.ts'
 
 /** Whether the log holds an opened turn without its closing `turn/end`. */
@@ -62,6 +75,18 @@ export class VibeModeConflictError extends Error {
   }
 }
 
+/** Wire schema of the `vibeWorkers` projection (validated before leaving the host). */
+const vibeWorkersSchema: ZodType<VibeWorkersProjection> = zod.object({
+  workers: zod.array(zod.object({
+    id: zod.string(),
+    name: zod.string().optional(),
+    tier: zod.enum(['fast', 'good']),
+    state: zod.enum(['starting', 'running', 'idle', 'parked', 'dead']),
+    turn: zod.number().int().nonnegative(),
+    lastActivity: zod.string().optional(),
+  })),
+})
+
 /**
  * `ctx.vibeMode`: owns the logged vibe-mode state, applies and narrates
  * selected state at step start, enforces the plan/compact mutex, and drives
@@ -72,6 +97,14 @@ export class VibeModeController extends Service {
 
   /** Validated deployment config. */
   readonly config: ResolvedVibeModeConfig
+
+  /**
+   * Live DIRECTOR-instructions text source for the `director:instructions`
+   * section thunk. Starts at the frozen config; the settings seam (below)
+   * swaps it for the resolved namespace when attached, so a runtime settings
+   * change reaches the next prompt assembly without restart or re-entry.
+   */
+  private sectionSource: () => string
 
   /**
    * Latest selection per session awaiting the next accepted in-turn pre-step.
@@ -85,6 +118,38 @@ export class VibeModeController extends Service {
   constructor(ctx: Context, config: VibeModeConfig = {}) {
     super(ctx, 'vibeMode')
     this.config = resolveConfig(config)
+    this.sectionSource = () => this.config.section
+
+    // Runtime DIRECTOR-instructions settings: the `dsh-vibe-mode` namespace
+    // resolves settings-user-layer → composition config (base) → schema
+    // defaults; the section thunk reads the live source. The browser
+    // settings panel can only touch this namespace because the host's
+    // api-proxy whitelist exposes it (added by the annex worker); without
+    // that entry every client read/write answers `settings-not-exposed`.
+    installSettingsSection(ctx, settingsNamespace('dsh-vibe-mode'), VibeModeConfigSchema, config, {
+      setSource: (source) => {
+        this.sectionSource = () => source().section ?? config.section ?? DEFAULT_DIRECTOR_SECTION
+      },
+      onChange: () => {},
+    })
+
+    // The `vibeWorkers` projection unit (session-projection RFC): folds the
+    // whole-value `vibe/workers` events the worker registry appends, serving
+    // clients the live roster. Activates only when a projection registry is
+    // composed (headless assemblies stay unaffected).
+    ctx.inject(['sessionProjections'], (projectionCtx) => {
+      projectionCtx.sessionProjections.register<'vibeWorkers', { workers: VibeWorkersProjection['workers'] }>({
+        key: 'vibeWorkers',
+        schema: vibeWorkersSchema,
+        init: () => ({ workers: [] }),
+        apply: (state, event) => {
+          if (event.type !== 'vibe/workers') return state
+          return { workers: event.data.workers }
+        },
+        view: state => ({ workers: state.workers }),
+        stateVersion: 1,
+      })
+    })
 
     // Pre-step is outside Session.append publication, so it can append the
     // log-only mode event inside an open turn without re-entering the session.
@@ -135,6 +200,7 @@ export class VibeModeController extends Service {
                 for (const worker of scope.registry.list()) {
                   ctx.subagents.interrupt(worker.childId, { kind: 'ancestor', agent })
                 }
+                scope.registry.parkAll()
               }
               this.scopes.delete(agent)
               scope.dispose()
@@ -151,7 +217,7 @@ export class VibeModeController extends Service {
           try {
             const outcome = this.set(agent, true)
             if (this.scopes.get(agent) === undefined) {
-              this.scopes.set(agent, applyDirectorScope(ctx, agent, this.config))
+              this.scopes.set(agent, applyDirectorScope(ctx, agent, this.config, this.sectionSource))
             }
             const text = outcome === 'queued'
               ? 'Entering DIRECTOR mode (applies from the next step).'
@@ -174,7 +240,7 @@ export class VibeModeController extends Service {
     ctx.on('agent/session-start', ({ agent }) => {
       if (!foldVibeMode(agent.session.events)) return
       if (this.scopes.get(agent) !== undefined) return
-      this.scopes.set(agent, applyDirectorScope(ctx, agent, this.config))
+      this.scopes.set(agent, applyDirectorScope(ctx, agent, this.config, this.sectionSource))
     })
 
     // Director disposal fallback: drain the worker forest (the director is

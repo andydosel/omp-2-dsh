@@ -15,6 +15,8 @@ import AgentRegistry, { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { SubagentListEntry } from '@deepseek-ai/dsh-subagent'
 import VibeModeController from '../src/mode.ts'
+import { SettingsProvider } from '@deepseek-ai/dsh-settings'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { VibeModeConfig } from '../src/index.ts'
 
 export const VIBE_CONFIG: VibeModeConfig = {
@@ -110,12 +112,31 @@ export class MockSubagents {
 
 /** Mount the real services plus a mock subagents provider. */
 export async function setup(mock: MockSubagents, config: VibeModeConfig = VIBE_CONFIG): Promise<Context> {
+  return setupCtx(mock, config, false)
+}
+
+/** Like setup, but with a memory settings provider mounted before the vibe plugin. */
+export async function setupWithSettings(
+  mock: MockSubagents,
+  config: VibeModeConfig = VIBE_CONFIG,
+  doc: Record<string, unknown> = {},
+): Promise<Context> {
+  return setupCtx(mock, config, true, doc)
+}
+
+async function setupCtx(
+  mock: MockSubagents,
+  config: VibeModeConfig,
+  withSettings: boolean,
+  doc: Record<string, unknown> = {},
+): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(SessionStore)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(CommandRuntime)
   await ctx.plugin(AgentRegistry)
+  if (withSettings) await ctx.plugin(MemorySettings, doc)
   ctx.provide('subagents', mock as never)
   await ctx.plugin(VibeModeController, config)
   for (const name of ['read', 'glob', 'grep', 'read_image', 'todo_write', 'write', 'bash']) {
@@ -147,6 +168,11 @@ export async function agentWithSession(
     status: 'idle',
     inject(message: UserMessage) {
       session.append('user/message', message, { surfaceOp: 'append' })
+    },
+    // Completion self-delivery sink: records steered notices for assertions.
+    steered: [] as UserMessage[],
+    steer(message: UserMessage) {
+      ;(agent as unknown as { steered: UserMessage[] }).steered.push(message)
     },
   } as unknown as Agent & { session: Session }
   let scoped!: Context
@@ -234,6 +260,28 @@ export function childTurn(session: Session, turn: number, outputText: string): v
   session.append('assistant/message', { turn, step: 1, message }, { surfaceOp: 'append' })
   session.append('step/end', { turn, step: 1 })
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
+}
+
+/** In-memory settings provider fixture (mirror of the settings package test fixture). */
+export class MemorySettings extends SettingsProvider {
+  doc: Record<string, unknown>
+
+  constructor(ctx: Context, doc: Record<string, unknown> = {}) {
+    super(ctx)
+    this.doc = structuredClone(doc)
+  }
+
+  get writable(): boolean {
+    return true
+  }
+
+  protected load(): Promise<Record<string, unknown>> {
+    return Promise.resolve(structuredClone(this.doc))
+  }
+
+  protected async persist(ns: string, section: Record<string, unknown>): Promise<void> {
+    this.doc[ns] = structuredClone(section)
+  }
 }
 
 export function findEvent<T extends SessionEvent['type']>(
