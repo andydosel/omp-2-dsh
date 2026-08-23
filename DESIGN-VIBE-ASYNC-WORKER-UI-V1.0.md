@@ -19,7 +19,7 @@
 - **A3 超时只通知**:await 超时仅通知主会话,不自动决定去留。
 - **A4 删除 waitMode**:异步为唯一模式;阻塞 = 退出 vibe 模式。
 - **C1 不新开 vibe_status**:不做独立查询工具,worker 信息查询走 `read agent://<sessionId>`。
-- **C2 omp 四态 + starting**:worker 状态采用 omp 四态(live/parked/released…)并新增 `starting` 态。
+- **C2 omp 四态 + starting**:worker 状态采用 omp 四态(running/idle/parked/dead)并新增 `starting` 态。
 - **C3 右侧 dock + 默认隐藏已完成 + 返回主会话按钮**:UI 形态定为右侧 dock,默认折叠已完成 worker,提供返回主会话按钮。
 - **C4 vibe/workers 事件 + annex 再生成**:vibe 模式广播 workers 事件,触发 annex 信息再生成。
 
