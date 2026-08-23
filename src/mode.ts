@@ -82,7 +82,7 @@ export class VibeModeController extends Service {
   /** Live per-agent director scopes (narrowing + worker bookkeeping). */
   private readonly scopes = new WeakMap<Agent, DirectorScope>()
 
-  constructor(ctx: Context, config: VibeModeConfig = { section: '' }) {
+  constructor(ctx: Context, config: VibeModeConfig = {}) {
     super(ctx, 'vibeMode')
     this.config = resolveConfig(config)
 
@@ -271,7 +271,7 @@ export class VibeModeController extends Service {
     const told = vibeModeAtLastHeader(session.events)
     if (told === undefined || told === target) return
     const text = target
-      ? 'The user switched this session to DIRECTOR (vibe) mode: your toolset is narrowed, and vibe_* tools control workers.'
+      ? 'The user switched this session to DIRECTOR (vibe) mode: your toolset is narrowed and you must delegate all work to vibe_* workers instead of doing it yourself.'
       : 'The user switched this session back to the default mode.'
     return createUserMessage({
       content: [{ type: 'text', text }],

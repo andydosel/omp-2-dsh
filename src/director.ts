@@ -1,6 +1,6 @@
 /**
  * Director-scope narrowing: apply and restore the toolset mask, presentation
- * mode, the five vibe tools, and the director instructions section on ONE
+ * mode, the five vibe tools, and the director instruction sections on ONE
  * agent's scoped ctx. Every registration is scoped to the director's
  * `agent.ctx`, so it is visible only to that agent, is exempt from the
  * inherited-layer restriction, and auto-unwinds if the agent is disposed
@@ -21,7 +21,19 @@ export const DIRECTOR_SECTION_ORDER = 51
 /** Prompt-section name for the DIRECTOR instructions. */
 export const DIRECTOR_SECTION_NAME = 'director:instructions'
 
-/** The four narrowing registrations, disposed together. */
+/** Prompt-section order for the DIRECTOR delegation-loop tool guidance (tool guidance band is 100–199). */
+export const DIRECTOR_TOOL_GUIDANCE_ORDER = 150
+/** Prompt-section name for the DIRECTOR delegation-loop guidance. */
+export const DIRECTOR_TOOL_GUIDANCE_NAME = 'director:tool-guidance'
+
+/** The fold-driven tool-guidance text: the delegation loop in one glance, placed beside the tool catalog. */
+const DIRECTOR_TOOL_GUIDANCE_TEXT =
+  'vibe tools: vibe_spawn (start a worker to do the actual work — cli=fast for mechanical work, cli=good for judgment), '
+  + 'vibe_wait (block until workers finish and return their results), '
+  + 'vibe_send (direct a worker\'s next turn), vibe_kill (park a running worker), vibe_list (show all workers). '
+  + 'Delegate every working step: you decompose, brief, review, and merge — workers do the doing.'
+
+/** The five narrowing registrations, disposed together. */
 export interface DirectorScope {
   /** The exact live director agent. */
   readonly agent: Agent
@@ -36,7 +48,7 @@ export interface DirectorScope {
  * to the configured read-only allow-list, force the native presentation (the
  * code-mode `run_code` transport cannot be removed by `restrict`), register
  * the five vibe tools on the agent's own scope, and mount the director
- * instructions section. All disposers are collected; `scope.dispose()` rolls
+ * instruction sections. All disposers are collected; `scope.dispose()` rolls
  * them back in reverse order.
  *
  * @param ctx - plugin root ctx (services resolve through `agent.ctx`).
@@ -87,6 +99,17 @@ export function applyDirectorScope(ctx: Context, agent: Agent, config: ResolvedV
       text: (context) => {
         const subject = context.agent ?? agent
         return foldVibeMode(subject.session.events) ? config.section : ''
+      },
+    }))
+    // 5. The delegation-loop tool guidance, fold-driven with the same state:
+    // a short reminder beside the tool catalog (order 150) that the five
+    // vibe tools exist and that the director only briefs, reviews, and merges.
+    disposers.push(agent.ctx.systemPrompt.section({
+      name: DIRECTOR_TOOL_GUIDANCE_NAME,
+      order: DIRECTOR_TOOL_GUIDANCE_ORDER,
+      text: (context) => {
+        const subject = context.agent ?? agent
+        return foldVibeMode(subject.session.events) ? DIRECTOR_TOOL_GUIDANCE_TEXT : ''
       },
     }))
   } catch (error) {

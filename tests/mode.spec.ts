@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { VibeModeConflictError, foldVibeMode, resolveConfig } from '../src/index.ts'
+import { DEFAULT_DIRECTOR_SECTION, VibeModeConflictError, foldVibeMode, resolveConfig } from '../src/index.ts'
 import {
   VIBE_CONFIG, MockSubagents, agentWithSession, boundary, closeTurn, header, noticeTexts, openTurn, setup,
 } from './harness.ts'
@@ -77,7 +77,7 @@ describe('vibe mode state machine', () => {
     const agent = await agentWithSession(ctx, 'mode-narration')
     header(agent.session)
     ctx.vibeMode.set(agent, true)
-    expect(noticeTexts(agent.session)).toEqual(['The user switched this session to DIRECTOR (vibe) mode: your toolset is narrowed, and vibe_* tools control workers.'])
+    expect(noticeTexts(agent.session)).toEqual(['The user switched this session to DIRECTOR (vibe) mode: your toolset is narrowed and you must delegate all work to vibe_* workers instead of doing it yourself.'])
     // A fresh header after the flip describes the active mode; switching back
     // narrates the reverse direction.
     header(agent.session)
@@ -115,6 +115,10 @@ describe('vibe mode state machine', () => {
     expect(resolved.provider).toBe('spawn')
     expect(resolved.waitTimeoutMs).toBe(5_000)
     expect(resolved.maxConsecutiveWakes).toBe(2)
+    // A missing section inherits the shipped DIRECTOR default (single source
+    // of truth); an explicitly blank one still fails loudly.
+    expect(resolveConfig({}).section).toBe(DEFAULT_DIRECTOR_SECTION)
+    expect(resolveConfig({}).section).toContain('MUST NOT')
     expect(() => resolveConfig({ section: '' })).toThrow(/non-empty/)
     expect(() => resolveConfig({ section: 'x', waitTimeoutMs: 99_000, maxWaitTimeoutMs: 10_000 })).toThrow(/exceeds/)
     expect(() => resolveConfig({ section: 'x', bogus: 1 } as never)).toThrow(/unknown key/)

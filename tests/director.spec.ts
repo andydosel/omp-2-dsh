@@ -57,6 +57,29 @@ describe('director narrowing', () => {
     expect(after.sections.find(section => section.name === 'director:instructions')).toBeUndefined()
   })
 
+  it('mounts the director:tool-guidance section at order 150, fold-driven', async () => {
+    const ctx = await setup(new MockSubagents())
+    const active = await agentWithSession(ctx, 'narrow-guidance-active', { active: true })
+    const activeScope = applyDirectorScope(ctx, active, ctx.vibeMode.config)
+    const activeAssembly = await assembleFor(ctx, active)
+    const guidance = activeAssembly.sections.find(section => section.name === 'director:tool-guidance')
+    expect(guidance?.text).toContain('vibe_spawn')
+    expect(guidance?.text).toMatch(/delegate/i)
+    // Sits inside the tool-guidance band, after the director instructions.
+    const guidanceIndex = activeAssembly.sections.findIndex(section => section.name === 'director:tool-guidance')
+    const directorIndex = activeAssembly.sections.findIndex(section => section.name === 'director:instructions')
+    expect(guidanceIndex).toBeGreaterThan(directorIndex)
+    // Inactive fold renders empty; dispose removes the registration.
+    const idle = await agentWithSession(ctx, 'narrow-guidance-idle')
+    const idleScope = applyDirectorScope(ctx, idle, ctx.vibeMode.config)
+    const idleAssembly = await assembleFor(ctx, idle)
+    expect(idleAssembly.sections.find(section => section.name === 'director:tool-guidance')?.text).toBe('')
+    idleScope.dispose()
+    activeScope.dispose()
+    const after = await assembleFor(ctx, active)
+    expect(after.sections.find(section => section.name === 'director:tool-guidance')).toBeUndefined()
+  })
+
   it('a fold-active session re-applies narrowing on session-start (resume restore)', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'narrow-resume', { active: true })

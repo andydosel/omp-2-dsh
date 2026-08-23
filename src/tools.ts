@@ -59,10 +59,10 @@ export function defineVibeTools(
 
   const spawn = defineTool({
     name: 'vibe_spawn',
-    description: 'Start a worker subagent that persists as its own session. '
-      + 'Use only in vibe mode. Choose `fast` for quick mechanical work and `good` for harder tasks; '
-      + '`fast` and `good` route to the models the deployment configured. '
-      + 'The call returns immediately with the worker\'s durable id; get the result with `vibe_wait`. '
+    description: 'Spawn a worker to do the actual work — prefer this over doing work yourself in DIRECTOR mode. '
+      + 'The worker persists as its own session; choose `fast` for quick mechanical work and `good` for harder judgment tasks '
+      + '(`fast`/`good` route to the models the deployment configured). '
+      + 'The call returns immediately with the worker\'s durable id; collect the result with `vibe_wait`. '
       + 'Workers run independently and keep their conversation across turns.',
     parameters: {
       cli: { type: 'string', required: true, enum: ['fast', 'good'], description: 'Worker tier: fast or good.' },
@@ -103,7 +103,8 @@ export function defineVibeTools(
 
   const send = defineTool({
     name: 'vibe_send',
-    description: 'Send a follow-up message to a vibe worker, starting its next turn. '
+    description: 'Direct a vibe worker\'s next turn — the way to iterate on a worker\'s result. '
+      + 'Send a follow-up message to a vibe worker, starting its next turn. '
       + 'The worker keeps its full conversation history; the message joins its FIFO queue. '
       + 'Collect the reply with `vibe_wait`.',
     parameters: {
@@ -134,7 +135,8 @@ export function defineVibeTools(
 
   const wait = defineTool({
     name: 'vibe_wait',
-    description: 'Block until the named vibe workers finish their current turn, returning each worker\'s final reply. '
+    description: 'Wait for worker results: block until the named vibe workers finish their current turn, returning each worker\'s final reply. '
+      + 'Use this after vibe_spawn/vibe_send to collect what your workers produced. '
       + 'With no `sessions`, waits for every worker this director spawned. '
       + 'Each result reports the completed turn number, its status (completed/timeout/aborted/disposed), '
       + 'and the worker\'s final output text. A timed-out wait returns [status: timeout] and leaves the worker running.',
@@ -190,8 +192,9 @@ export function defineVibeTools(
 
   const kill = defineTool({
     name: 'vibe_kill',
-    description: 'Stop a vibe worker\'s current turn (park). The worker\'s session, queued messages, and '
-      + 'descendants are preserved; a later `vibe_send` resumes it. The turn ends with status aborted.',
+    description: 'Stop (park) a vibe worker\'s current turn — use when a worker is off track and you want to redirect it. '
+      + 'The worker\'s session, queued messages, and descendants are preserved; a later `vibe_send` resumes it. '
+      + 'The turn ends with status aborted.',
     parameters: {
       session: { type: 'string', required: true, description: 'The worker\'s subagent id from vibe_spawn.' },
     },
@@ -215,7 +218,7 @@ export function defineVibeTools(
   const list = defineTool({
     name: 'vibe_list',
     description: 'List every worker this director spawned: its durable id, tier, label, dispatched turns, '
-      + 'and live status (running/idle, or inactive when only persisted).',
+      + 'and live status (running/idle, or inactive when only persisted). Use it to see what work is in flight.',
     parameters: {},
     output: {
       schema: {

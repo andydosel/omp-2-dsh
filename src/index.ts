@@ -34,7 +34,13 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export { VibeModeController, VibeModeConflictError } from './mode.ts'
-export { applyDirectorScope, DIRECTOR_SECTION_NAME, DIRECTOR_SECTION_ORDER } from './director.ts'
+export {
+  applyDirectorScope,
+  DIRECTOR_SECTION_NAME,
+  DIRECTOR_SECTION_ORDER,
+  DIRECTOR_TOOL_GUIDANCE_NAME,
+  DIRECTOR_TOOL_GUIDANCE_ORDER,
+} from './director.ts'
 export { WorkerRegistry, type TurnEndResult, type WorkerRecord } from './workers.ts'
 export * from './types.ts'
 

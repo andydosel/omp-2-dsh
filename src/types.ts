@@ -18,13 +18,27 @@ export interface TierConfig {
   model?: string
 }
 
+/**
+ * The shipped DIRECTOR instructions: imperative delegation rules rendered as
+ * the `director:instructions` prompt section while vibe mode is active. A
+ * deployment may override with its own `section` config.
+ */
+export const DEFAULT_DIRECTOR_SECTION =
+  'You are the DIRECTOR in vibe mode. You MUST NOT perform exploration or implementation work yourself. '
+  + 'Your only job is to: (a) decompose the task, (b) spawn workers via vibe_spawn — cli=fast for mechanical work, cli=good for judgment — each with a complete self-contained brief, '
+  + '(c) wait with vibe_wait and review, (d) iterate with vibe_send and merge results into one answer. '
+  + 'EVERY task step beyond a quick read MUST be delegated. Self-exploration is limited to what a good worker brief needs (one listing or one file read). '
+  + 'If a step would take more than ~2 of your own tool calls, delegate it. '
+  + 'NEVER explore, edit, write, or test yourself.'
+
 /** Deployment configuration for the vibe/director mode plugin. */
 export interface VibeModeConfig {
   /**
-   * Deployment-owned DIRECTOR instructions, rendered as the
-   * `director:instructions` prompt section while vibe mode is active.
+   * DIRECTOR instructions, rendered as the `director:instructions` prompt
+   * section while vibe mode is active. Defaults to the shipped
+   * {@link DEFAULT_DIRECTOR_SECTION}; a blank string still fails loudly.
    */
-  section: string
+  section?: string
   /**
    * Global tool names that stay visible to the director; every other
    * inherited tool is masked for that agent. Defaults to the read-only set
@@ -98,17 +112,18 @@ function resolveTier(raw: TierConfig | undefined): TierConfig | undefined {
 
 /**
  * Validate deployment-owned vibe-mode config. Missing, blank, or mistyped
- * fields fail at plugin load rather than being ignored.
+ * fields fail at plugin load rather than being ignored; a missing `section`
+ * inherits the shipped {@link DEFAULT_DIRECTOR_SECTION}.
  *
  * @param config Raw plugin config.
  * @returns A detached validated config.
  */
 export function resolveConfig(config: VibeModeConfig): ResolvedVibeModeConfig {
   const section = (config as Partial<VibeModeConfig>).section
-  if (typeof section !== 'string') {
-    throw new Error('VibeModeConfig needs a string `section`')
+  if (section !== undefined && typeof section !== 'string') {
+    throw new Error('VibeModeConfig `section` must be a string')
   }
-  if (section.trim() === '') {
+  if (section?.trim() === '') {
     throw new Error('VibeModeConfig needs a non-empty `section`')
   }
   const readOnlyTools = config.readOnlyTools ?? [...DEFAULT_READ_ONLY_TOOLS]
@@ -145,7 +160,7 @@ export function resolveConfig(config: VibeModeConfig): ResolvedVibeModeConfig {
     throw new Error(`VibeModeConfig has unknown key(s) ${unknown.join(', ')}`)
   }
   return {
-    section,
+    section: section ?? DEFAULT_DIRECTOR_SECTION,
     readOnlyTools,
     provider,
     tiers,
