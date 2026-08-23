@@ -16,12 +16,15 @@ import type { FsInfo, FsTarget } from '@deepseek-ai/dsh-fs'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import type { JsonValue, SessionStore } from '@deepseek-ai/dsh-session'
 import { parseSelectors } from './selectors.ts'
 import type { ParsedSelectors } from './selectors.ts'
 import type { LineSelector } from './selectors.ts'
 import { buildWindow, formatNumberedRead, formatRawRead, langFromPath, readMetaFromMeta } from './render.ts'
 import type { FileTextLine, WindowRequest, WindowResult } from './render.ts'
+import { AGENT_SCHEME, formatAgentRawRead, formatAgentRead, parseAgentPath, renderAgentTranscript } from './agent.ts'
+import type { AgentPath } from './agent.ts'
 import { buildDirectoryTree, renderDirectoryTree } from './directory.ts'
 import type { DirectoryCaps } from './directory.ts'
 import {
@@ -81,12 +84,14 @@ export interface ReadToolCaps {
   /** URL output caps. */
   urlMaxLines: number
   urlMaxBytes: number
+  /** Characters of one agent:// tool-result body kept before elision. */
+  agentToolResultChars: number
 }
 
 /** Canonical `read` value: one object, closed schema, kind-specific optional fields. */
 export type ReadValue = {
   path: string
-  kind: 'file' | 'directory' | 'archive' | 'sqlite' | 'url'
+  kind: 'file' | 'directory' | 'archive' | 'sqlite' | 'url' | 'agent'
   offset?: number
   lines?: FileTextLine[]
   text?: string
@@ -108,6 +113,14 @@ export type ReadValue = {
   query?: string
   statusCode?: number
   failed?: string
+  /** `agent://` reads: the resolved session id. */
+  sessionId?: string
+  /** `agent://` reads: rendered conversation-entry count. */
+  messageCount?: number
+  /** `agent://` reads: session creation epoch ms. */
+  createdAt?: number
+  /** `agent://` reads: epoch ms of the last non-seed log event. */
+  updatedAt?: number
 }
 
 /** Probe a path for existence and type without emitting observations. */
@@ -129,6 +142,18 @@ function firstSeparator(path: string): number | undefined {
     if (char === ':' || char === '?') return i
   }
   return undefined
+}
+
+/**
+ * Re-apply a stripped `:raw` suffix to a parsed selector. `parseSelectors`
+ * keys off the LAST `:`, which for an `agent://` URL is the scheme colon, so
+ * the agent branches strip `:raw` before parsing and reapply it here.
+ */
+function reapplyRaw(selector: LineSelector, raw: boolean): LineSelector {
+  if (!raw) return selector
+  return selector.kind === 'range' || selector.kind === 'ranges'
+    ? { ...selector, raw: true }
+    : { kind: 'raw' }
 }
 
 /** Build the window request for a parsed selector. */
@@ -396,13 +421,96 @@ async function readUrlValue(ctx: Context, caps: ReadToolCaps, rawPath: string, e
   }
 }
 
-/** The unified dispatch: URL → literal path → archive → SQLite → file → directory. */
+/**
+ * Read a live session's transcript via `agent://<sessionId>` (or the nested
+ * `agent://<parent>/<child>` form — child sessions carry their own unique
+ * ids, so the final segment is resolved and the leading segment verified
+ * against the child's durable `parentSession` header). Unknown sessions and
+ * relation mismatches are failed notes, not throws, mirroring the URL branch.
+ */
+async function readAgentValue(ctx: Context, caps: ReadToolCaps, rawPath: string, exec: ToolExecution): Promise<ReadValue> {
+  // `:raw` is stripped before selector parsing: parseSelectors keys off the
+  // LAST `:`, which for an `agent://` URL is the scheme colon.
+  const rawTail = rawPath.endsWith(':raw')
+  const selectorPath = rawTail ? rawPath.slice(0, rawPath.length - ':raw'.length) : rawPath
+  const parsed = parseSelectors(selectorPath)
+  const agent = parseAgentPath(parsed.base)
+  if (agent === undefined) {
+    // Unreachable through the dispatcher; keep the branch total.
+    return { path: rawPath, kind: 'agent', failed: `not an agent URL: "${rawPath}"` }
+  }
+
+  const store = (ctx as { sessions?: SessionStore }).sessions
+  if (store === undefined) {
+    return {
+      path: rawPath,
+      kind: 'agent',
+      failed: 'sessions service is not mounted in this context',
+      text: `Failed to read ${rawPath}: the sessions service is not mounted in this context.`,
+    }
+  }
+  const session = store.get(SessionId(agent.sessionId))
+  if (session === undefined) {
+    // Not a throw: an unknown address is a value the caller can react to.
+    const hint = agent.parentId !== undefined
+      ? ` no live session "${agent.sessionId}" under "${agent.parentId}" in this process.`
+      : ` no live session "${agent.sessionId}" in this process (persisted sessions must be resumed before they can be read).`
+    return {
+      path: rawPath,
+      kind: 'agent',
+      failed: `unknown session "${agent.sessionId}"`,
+      text: `Failed to read ${rawPath}:${hint}`,
+    }
+  }
+  if (agent.parentId !== undefined) {
+    const parent = store.get(SessionId(agent.parentId))
+    const declaredParent = session.header.parentSession
+    if (parent !== undefined && declaredParent !== undefined && declaredParent !== parent.id) {
+      return {
+        path: rawPath,
+        kind: 'agent',
+        failed: `session "${agent.sessionId}" is not a child of "${agent.parentId}"`,
+        text: `Failed to read ${rawPath}: session "${agent.sessionId}" declares parent "${declaredParent}", not "${agent.parentId}".`,
+      }
+    }
+  }
+
+  const transcript = renderAgentTranscript(session, caps.agentToolResultChars)
+  // Recombine the stripped `:raw` with the parsed selector so `agent://id:raw`
+  // and `agent://id:3-5:raw` window the transcript exactly like files.
+  const selector = reapplyRaw(parsed.selector, rawTail)
+  const request = windowRequestFromSelector(selector, caps)
+  const window = await buildWindow([transcript.text], request)
+  const lastReal = [...session.events].reverse().find(event => event.type !== 'session/end-seed')
+  return {
+    path: `${AGENT_SCHEME}${session.id}`,
+    kind: 'agent',
+    sessionId: session.id,
+    messageCount: transcript.messageCount,
+    createdAt: session.header.createdAt,
+    updatedAt: lastReal?.time ?? session.header.createdAt,
+    offset: window.offset,
+    ...window.lines.length > 0 ? { lines: window.lines } : {},
+    ...window.rawText !== '' ? { text: window.rawText } : {},
+    totalLines: window.totalLines,
+    truncated: window.truncatedByBytes || window.truncatedByLines || transcript.elided,
+    ...window.outOfRange ? { outOfRange: true } : {},
+  }
+}
+
+/** The unified dispatch: URL → internal URL → literal path → archive → SQLite → file → directory. */
 async function executeRead(ctx: Context, caps: ReadToolCaps, rawPath: string, exec: ToolExecution): Promise<ReadValue> {
   if (rawPath.trim().length === 0) throw new Error('path must be a non-empty string')
 
   // 1. URL (including a trailing :raw)
   if (isUrlPath(rawPath) || (rawPath.endsWith(':raw') && isUrlPath(rawPath.slice(0, rawPath.length - 4)))) {
     return readUrlValue(ctx, caps, rawPath, exec)
+  }
+
+  // 1.5 Internal URL: agent://<sessionId> session transcripts (selectors
+  //     included — the branch strips and re-applies :raw itself).
+  if (rawPath.startsWith(AGENT_SCHEME)) {
+    return readAgentValue(ctx, caps, rawPath, exec)
   }
 
   // 2. Literal path first; archive/SQLite files defer to their branches so a
@@ -536,6 +644,31 @@ export function renderReadValue(args: { path: string }, value: ReadValue, caps: 
           ...value.failed !== undefined ? { failed: value.failed } : {},
         }),
       }]
+    case 'agent': {
+      if (value.failed !== undefined) {
+        return [{ type: 'text', text: `<path>${value.path}</path>\n<type>agent</type>\n<content>\n${value.text ?? value.failed}\n</content>` }]
+      }
+      // `:raw` reapplied after stripping (see {@link reapplyRaw}) so the
+      // renderer formats the same raw/numbered mode the reader produced.
+      const rawTail = args.path.endsWith(':raw')
+      const selectorPath = rawTail ? args.path.slice(0, args.path.length - ':raw'.length) : args.path
+      const selector = reapplyRaw(safeParseSelectors(selectorPath).selector, rawTail)
+      const request = windowRequestFromSelector(selector, caps)
+      const window: WindowResult = {
+        offset: value.offset ?? 1,
+        lines: value.lines ?? [],
+        rawText: value.text ?? '',
+        totalLines: value.totalLines ?? 0,
+        truncatedByBytes: false,
+        truncatedByLines: value.truncated ?? false,
+        outOfRange: value.outOfRange ?? false,
+        requestedEnd: request.ranges[0]?.end ?? 0,
+      }
+      const body = request.mode === 'raw'
+        ? formatAgentRawRead(value.path, window)
+        : formatAgentRead(value.path, window)
+      return [{ type: 'text', text: body }]
+    }
   }
 }
 
@@ -548,16 +681,19 @@ export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
   ctx.systemPrompt.section({
     name: 'tool:read',
     order: 100,
-    text: 'Use the read tool — not shell commands like cat — to inspect files, directories, archives, SQLite databases, and URLs. '
+    text: 'Use the read tool — not shell commands like cat — to inspect files, directories, archives, SQLite databases, URLs, and live session transcripts. '
       + 'For text files the path may end with a selector: :raw (no line numbers), :N (one line), :A-B (line range), :A+C (C lines from A), '
       + 'comma-separated ranges like :A-B,C-D, or :range:raw (raw range). Line numbers are 1-based. '
       + 'Archives read as path:inner/path; SQLite as path:table, path:table:key, or path?q=SELECT…. '
-      + 'URLs are fetched and converted to text (append :raw for the raw body).',
+      + 'URLs are fetched and converted to text (append :raw for the raw body). '
+      + 'agent://<sessionId> reads a live session\'s transcript (created/updated, message count, and every user/assistant/tool-result entry, with the final assistant output marked); '
+      + 'agent://<parent>/<child> reads the child session named by the last segment. '
+      + 'Line selectors apply to agent transcripts too (agent://<id>:1-50).',
   })
 
   ctx.tools.register(defineTool({
     name: 'read',
-    description: 'Read a text file (with line selectors), directory tree, archive entry, SQLite table/row/query, or URL.',
+    description: 'Read a text file (with line selectors), directory tree, archive entry, SQLite table/row/query, URL, or live agent:// session transcript.',
     parameters: {
       path: { type: 'string', required: true, description: 'Path, URL, or archive/SQLite selector to read.' },
     },
@@ -567,7 +703,7 @@ export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
         additionalProperties: false,
         properties: {
           path: { type: 'string', required: true },
-          kind: { type: 'string', required: true, enum: ['file', 'directory', 'archive', 'sqlite', 'url'] },
+          kind: { type: 'string', required: true, enum: ['file', 'directory', 'archive', 'sqlite', 'url', 'agent'] },
           offset: { type: 'integer' },
           lines: {
             type: 'array',
@@ -612,6 +748,10 @@ export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
           query: { type: 'string' },
           statusCode: { type: 'integer' },
           failed: { type: 'string' },
+          sessionId: { type: 'string' },
+          messageCount: { type: 'integer' },
+          createdAt: { type: 'integer' },
+          updatedAt: { type: 'integer' },
         },
       },
       render: (args, value) => renderReadValue(args, value, caps),
@@ -644,7 +784,8 @@ export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
         card: 'generic',
         title: `Read ${args.path}`,
         kind: 'read',
-        locations: [{ path: args.path, ...line !== undefined ? { line } : {} }],
+        // An agent:// URL is not a file — no openable location for the UI.
+        locations: args.path.startsWith(AGENT_SCHEME) ? [] : [{ path: args.path, ...line !== undefined ? { line } : {} }],
       }
     },
     // Result-time display: the read card from persisted meta when the content

@@ -16,6 +16,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-user-approval'
+import { AGENT_TOOL_RESULT_CHARS } from './read/agent.ts'
 import { applyReadTool } from './read/index.ts'
 import type { ReadToolCaps } from './read/index.ts'
 import { applyWriteTool } from './write/index.ts'
@@ -29,8 +30,7 @@ import { FsSandboxController } from './sandbox.ts'
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'dsh-tool-read-write'
 
-/** Services required by the tool suite. */
-export const inject = ['tools', 'fs', 'systemPrompt']
+export const inject = ['tools', 'fs', 'systemPrompt', 'sessions']
 
 /** Plugin config (all optional — `Config` supplies the defaults). */
 export interface Config {
@@ -58,6 +58,8 @@ export interface Config {
   urlMaxLines?: number
   /** URL output byte cap. */
   urlMaxBytes?: number
+  /** Characters of one agent:// tool-result body kept before elision. */
+  agentToolResultChars?: number
   /** `inspect_image` registration mode: auto|on|off. */
   inspectImageMode?: InspectImageMode
   /** `inspect_image` vision-call timeout (ms). */
@@ -89,6 +91,7 @@ export const Config: z<Config> = z.object({
   sqliteRawQueryMaxRows: z.number().default(1000),
   urlMaxLines: z.number().default(300),
   urlMaxBytes: z.number().default(READ_MAX_BYTES),
+  agentToolResultChars: z.number().default(AGENT_TOOL_RESULT_CHARS),
   inspectImageMode: z.union(['auto', 'on', 'off'] as const).default('auto'),
   inspectImageTimeoutMs: z.number().default(300_000),
   inspectImageMaxBytes: z.number().default(20 * 1024 * 1024),
@@ -120,7 +123,8 @@ export function apply(ctx: Context, config: Config): void {
     'readDefaultLimit', 'readMaxLines', 'readMaxLineLength', 'readMaxBytes',
     'directoryDepth', 'directoryPerDir', 'archiveListLimit',
     'sqliteQueryLimit', 'sqliteQueryMax', 'sqliteRawQueryMaxRows',
-    'urlMaxLines', 'urlMaxBytes', 'inspectImageTimeoutMs', 'inspectImageMaxBytes',
+    'urlMaxLines', 'urlMaxBytes', 'agentToolResultChars',
+    'inspectImageTimeoutMs', 'inspectImageMaxBytes',
   ]) {
     assertPositiveInteger(key, resolved[key as keyof ResolvedConfig] as number)
   }
@@ -137,6 +141,7 @@ export function apply(ctx: Context, config: Config): void {
     sqliteRawQueryMaxRows: resolved.sqliteRawQueryMaxRows,
     urlMaxLines: resolved.urlMaxLines,
     urlMaxBytes: resolved.urlMaxBytes,
+    agentToolResultChars: resolved.agentToolResultChars,
   }
   applyReadTool(ctx, caps)
 
