@@ -170,7 +170,7 @@ export class ReviewCoordinator {
       turn: null,
     })
 
-    // Mode event (committed: command state, no open turn).
+    // Mode flag (plugin store; committed: command state, no open turn).
     const outcome = this.mode.set(agent, true)
     if (outcome !== 'committed') {
       // The mode flip raced; close the lock and fail closed.
