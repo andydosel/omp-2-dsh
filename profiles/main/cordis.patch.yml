@@ -1,0 +1,139 @@
+# dsh profile-main overlay: compact-mode + vibe-mode + tool-read-write +
+# advisor + mode-ui + channel-wechat(disabled), applied AFTER the dsh-base and
+# dsh-web-app bundle layers (via `--patch` on the web profile, or as the user
+# layer of a `main` profile installed under ~/.dsh/profiles/).
+#
+# ── disables ────────────────────────────────────────────────────────────────
+#
+# The base bundle mounts `compaction-basic` (row `compaction-basic`) and
+# `command-compact` (row `command-compact`). Both must be disabled: compact-mode
+# provides `ctx.compaction` (a single-backend service — a second provider is a
+# hard conflict) and registers the `/compact*` command family (duplicate
+# `compact` registration error otherwise). The `name` guard makes a base change
+# fail loud instead of disabling the wrong row.
+#
+# `tool-fs` is disabled the same way. dsh-tool-read-write registers the
+# same-name `read`/`write`/`edit`/`read_image` (+ `inspect_image`) tools, and a
+# same-scope duplicate registration throws — so the stock row must be gone
+# before the plugin applies. On the web profile the web-app bundle already
+# disables this host row (the model-facing fs tools move to agent presets), so
+# this row is an idempotent no-op there; on the CLI/TUI (base-only) profile it
+# is what hands the whole fs tool family to the plugin at the host layer.
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  disabled: true
+
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'
+  disabled: true
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+  disabled: true
+
+# ── plugins ─────────────────────────────────────────────────────────────────
+#
+# `name` is a module specifier the Cordis Loader imports. Package names are
+# resolved from the PROFILE directory's node_modules (`dsh plugin --profile
+# web add <path>` installs each plugin there as a hoisted `link:` dependency,
+# see README/run.ps1). Package names are REQUIRED for the browser to receive
+# our client bundles: client-modules resolves every loader entry by package
+# name from the profile dir, and a failed resolution is cached as a permanent
+# negative verdict. The mode-ui package declares `dsh.client` and
+# `exports["./client"]`, so its row also becomes a web boot entry.
+# Build prerequisites: tree-engine, compact-mode, vibe-mode, tool-read-write,
+# advisor, channel-wechat and mode-ui (both faces) must be `pnpm run build`
+# first (see README/run.ps1).
+- insert:
+    - id: compact-mode
+      name: '@dsh-plugin/dsh-compact-mode'
+      config:
+        thresholdRatio: 0.6            # shake 后 >60% 提示进入 compact 模式
+        keepRecentTokens: 20000        # shake 保护窗口
+        minShakeSavingsRatio: 0.05     # 防空转
+        summarizationProvider: ''      # 空 = 沿用最近请求路由
+        summarizationModel: ''
+        maxTokens: 8192
+        promptOnThreshold: true        # 60% 时提示
+        promptCooldown: 0              # 0 = 每会话每阈值一次
+        promptOnHardOverflow: true     # 硬溢出提示+选项
+        reviewTimeoutMs: 0             # 0 = 审阅不超时
+        auto: true                     # 注册自动压力/溢出监听
+        reviewTree: 'domain'           # 独立 domain 存储(web profile 已挂 storage-domain)
+        readOnlyTools: []              # 保留字段(设计 §2.9 占位,compact-mode 不使用)
+
+    - id: vibe-mode
+      name: '@dsh-plugin/dsh-vibe-mode'
+      config:
+        # No `section`: the DIRECTOR instructions ship from the plugin default
+        # (imperative delegation rules — MUST NOT self-explore, delegate every
+        # step beyond a quick read via vibe_spawn). Override here only to
+        # customize the wording for this deployment.
+        readOnlyTools: [read, glob, grep, read_image, todo_write]
+        provider: spawn
+        waitTimeoutMs: 60000
+        maxWaitTimeoutMs: 600000
+        maxConsecutiveWakes: 3
+
+    # The omp-style read/write suite, replacing `@deepseek-ai/dsh-tool-fs`
+    # wholesale (same-name read/write/edit/read_image + new inspect_image).
+    # All config keys optional; `Config` supplies the defaults below, so no
+    # `config` block is needed. The plugin registers the `tool:read` system
+    # prompt section itself. Host-layer row: on the CLI/TUI profile it is the
+    # replacement (tool-fs above is disabled); on the web profile it lands in
+    # the global tool layer, visible to any agent whose preset does not mount
+    # the stock tool-fs (see the shipped `standard-rw` preset in
+    # agent-presets/standard-rw/).
+    - id: tool-read-write
+      name: '@dsh-plugin/dsh-tool-read-write'
+
+    # Session advisor: reviewer model(s) attached to the primary session,
+    # restricted to read/grep/glob (+ a scoped `advise` tool). immuneTurns
+    # keeps successful concern/blocker deliveries from re-steering for 3
+    # primary turns; syncBacklog 0 disables the bounded catch-up wait.
+    - id: advisor
+      name: '@dsh-plugin/dsh-advisor'
+      config:
+        enabled: true
+        defaultTools: [read, grep, glob]
+        immuneTurns: 3
+        syncBacklog: 0
+
+    # Mode-status Web UI: host projection units (compactMode/vibeMode/
+    # advisorStatus/wechatChannel) + browser badges in the session header's
+    # utilities band. All-default config; the client face is picked up from
+    # this row's package declaration (`dsh.client` + `exports["./client"]`).
+    - id: mode-ui
+      name: '@dsh-plugin/dsh-mode-ui'
+      config: {}
+
+    # WeChat (Tencent iLink) channel. Deliberately DISABLED for now — hermes
+    # keeps the account (same iLink bot account is mutually exclusive; the
+    # later starter gets 403s). The row is wired so activation is a config
+    # flip: set `enabled: true`, stop the hermes gateway first, and point
+    # `stateDir` at hermes's `weixin/` dir to reuse its accounts/pairing data.
+    - id: channel-wechat
+      name: '@dsh-plugin/dsh-channel-wechat'
+      config:
+        enabled: false
+        stateDir: 'C:/Users/Vantage_XLST/AppData/Local/hermes/weixin'
+
+# ── web preset selection ────────────────────────────────────────────────────
+#
+# On the WEB profile the model-facing fs tools are mounted per-agent by agent
+# presets (the web-app bundle disables the host `tool-fs` row), so the read/write
+# replacement needs a preset that does NOT mount the stock tool-fs. The roster
+# root for locally authored presets is `$DSH_HOME/.agent-presets` (the shipped
+# root is read-only and `apps/cli/src/profile-boot.ts` pins the roster's
+# `roots` to it — a patch cannot add a root), so the profile SHIPS the
+# ready-made `standard-rw` preset in `agent-presets/standard-rw/` and you copy
+# it into the user root (exact command in README "web preset step"). Once it
+# exists, this row makes every NEW web session use it: the CLI composes the
+# agent-presets config from the bundle/patch layers and only overrides `roots`,
+# so a patch-set `default` survives. A session created before the preset is
+# installed fails loud at resolution with the available ids — the same
+# fail-loud contract as the wechat config validation.
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  config:
+    default: standard-rw
