@@ -1,12 +1,12 @@
 /**
- * Mode state machine + fold + mutex + pre-step reject semantics.
+ * Mode state machine + mutex + pre-step reject semantics (plugin-owned store).
  *
  * @module dsh-compact-mode/tests/mode.spec
  */
 
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { CompactModeController, foldCompactMode } from '../src/mode.ts'
+import { CompactModeController } from '../src/mode.ts'
 import { CompactModeEngine } from '../src/engine.ts'
 import { makeAgent, makeContext } from './helpers.ts'
 
@@ -15,18 +15,6 @@ function makeModeCtx() {
   const controller = new CompactModeController(ctx)
   return { ctx, controller }
 }
-
-describe('foldCompactMode', () => {
-  it('folds last-wins from a log', () => {
-    const { controller } = makeModeCtx()
-    const agent = makeAgent(controller.ctx)
-    expect(foldCompactMode(agent.session.events)).toBe(false)
-    controller.set(agent, true)
-    expect(foldCompactMode(agent.session.events)).toBe(true)
-    controller.set(agent, false)
-    expect(foldCompactMode(agent.session.events)).toBe(false)
-  })
-})
 
 describe('CompactModeController.set', () => {
   it('commits between turns', () => {
@@ -53,7 +41,7 @@ describe('CompactModeController.set', () => {
     })
     void boundaryCommitted
     agent.session.append('turn/end', { turn: 1, reason: 'done' })
-    expect(foldCompactMode(agent.session.events)).toBe(false)
+    expect(controller.get(agent).active).toBe(false)
   })
 })
 

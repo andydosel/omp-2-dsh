@@ -25,7 +25,7 @@ import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage } from '@deepseek-ai/ds
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { CompactModeConfig, ResolvedConfig } from './config.ts'
 import { CompactModeConfigSchema, resolveConfig } from './config.ts'
-import { CompactModeController, foldCompactMode } from './mode.ts'
+import { CompactModeController } from './mode.ts'
 import { ReviewCoordinator } from './review.ts'
 import {
   assertNoActiveCompaction,
@@ -264,9 +264,9 @@ export class CompactModeEngine extends CompactionEngine {
     }))
   }
 
-  /** Whether compact mode is active for the agent's session (folded from log). */
+  /** Whether compact mode is active for the agent's session (store flag or live review). */
   isCompactActive(agent: Agent): boolean {
-    return foldCompactMode(agent.session.events) || this.reviews.isActive(agent.session)
+    return this.mode.store.get(agent.session.id).active || this.reviews.isActive(agent.session)
   }
 }
 

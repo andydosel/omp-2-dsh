@@ -30,7 +30,7 @@ import { registerCompactCommands } from './commands.ts'
 import type { CompactModeConfig } from './config.ts'
 
 export { CompactModeEngine } from './engine.ts'
-export { CompactModeController, foldCompactMode, hasOpenTurn } from './mode.ts'
+export { CompactModeController, hasOpenTurn } from './mode.ts'
 export { resolveConfig, CompactModeConfigSchema } from './config.ts'
 export type { CompactModeConfig, ResolvedConfig } from './config.ts'
 export { ReviewCoordinator } from './review.ts'

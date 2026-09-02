@@ -16,7 +16,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CompactionId } from '@deepseek-ai/dsh-compaction'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { CompactModeEngine } from '../src/engine.ts'
-import { foldCompactMode } from '../src/mode.ts'
+
 import { makeAgent, makeContext } from './helpers.ts'
 import type { MockLlm } from './helpers.ts'
 
@@ -249,7 +249,7 @@ describe('review queue: late instructions and crash windows', () => {
     expect(await state.tree.engine.getLeaf()).toBe('v3')
     // The review survives the failures: mode on, lock open, still active.
     expect(engine.reviews.isActive(agent)).toBe(true)
-    expect(foldCompactMode(agent.session.events)).toBe(true)
+    expect(engine.mode.get(agent).active).toBe(true)
     expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
   })
 })
@@ -284,7 +284,7 @@ describe('span changes during review', () => {
     expect(agent.session.events.some(e => e.type === 'compaction/summary')).toBe(false)
     expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
     // Lock still open, mode still active, review state intact.
-    expect(foldCompactMode(agent.session.events)).toBe(true)
+    expect(engine.mode.get(agent).active).toBe(true)
     expect(engine.reviews.isActive(agent)).toBe(true)
     expect(await state.tree.engine.getLeaf()).not.toBeNull()
   })
@@ -309,7 +309,7 @@ describe('span changes during review', () => {
 
     expect(agent.session.events).toHaveLength(lengthBefore)
     expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
-    expect(foldCompactMode(agent.session.events)).toBe(true)
+    expect(engine.mode.get(agent).active).toBe(true)
     expect(engine.reviews.isActive(agent)).toBe(true)
   })
 })
@@ -322,7 +322,7 @@ describe('lock conflicts', () => {
     await expect(engine.reviews.enter(agent))
       .rejects.toMatchObject({ name: 'ManualCompactionError', code: 'busy' })
     expect(engine.reviews.isActive(agent)).toBe(false)
-    expect(foldCompactMode(agent.session.events)).toBe(false)
+    expect(engine.mode.get(agent).active).toBe(false)
   })
 
   it('enter rejects with busy while a turn is open (not command state)', async () => {
@@ -395,7 +395,7 @@ describe('apply rollback', () => {
       && typeof e.surfaceOp === 'object')).toBe(false)
     expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
     // Lock open, mode active, review retained with its tree.
-    expect(foldCompactMode(agent.session.events)).toBe(true)
+    expect(engine.mode.get(agent).active).toBe(true)
     expect(engine.reviews.isActive(agent)).toBe(true)
     expect(await state.tree.engine.getLeaf()).not.toBeNull()
   })
@@ -425,7 +425,7 @@ describe('apply rollback', () => {
     expect(replaceIdx).toBeGreaterThan(summaryIdx)
     expect(endIdx).toBeGreaterThan(replaceIdx)
     expect(events[endIdx]!.data.error).toBeUndefined()
-    expect(foldCompactMode(events)).toBe(false)
+    expect(engine.mode.get(agent).active).toBe(false)
     expect(engine.reviews.isActive(agent)).toBe(true)
     expect(await state.tree.engine.getLeaf()).not.toBeNull()
 
@@ -470,7 +470,7 @@ describe('apply success and abort lifecycle', () => {
     expect(events[endIdx]!.data.error).toBeUndefined()
 
     // Mode exited, review state cleared, tree destroyed.
-    expect(foldCompactMode(events)).toBe(false)
+    expect(engine.mode.get(agent).active).toBe(false)
     expect(engine.reviews.isActive(agent)).toBe(false)
     expect(engine.reviews.reviews.has(agent.session.id)).toBe(false)
     await waitFor(() => { expect(readTreeKeys()).not.toContain(agent.session.id) })
@@ -489,7 +489,7 @@ describe('apply success and abort lifecycle', () => {
     const end = events.find(e => e.type === 'compaction/end')
     expect(end!.data.error).toBe('user cancelled')
     expect(end!.data.turn).toBeNull()
-    expect(foldCompactMode(events)).toBe(false)
+    expect(engine.mode.get(agent).active).toBe(false)
     expect(engine.reviews.isActive(agent)).toBe(false)
     expect(engine.reviews.reviews.has(agent.session.id)).toBe(false)
 

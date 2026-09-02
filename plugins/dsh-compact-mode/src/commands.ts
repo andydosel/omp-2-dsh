@@ -63,6 +63,23 @@ export function registerCompactCommands(ctx: Context, engine: CompactModeEngine)
       return ok('Compact mode active: the live loop is paused; the first draft is being generated. Use /compact_edit <text> to revise, /compact view <n> to inspect, /compact_apply to apply, or /compact_abort to leave without applying.')
     }
 
+    // One-click restore: re-enter review when the plugin store says a review
+    // was active before the last restart.
+    const restore: CommandDefinition['handler'] = async ({ agent, signal, commandId }) => {
+      if (!engine.mode.store.get(agent.session.id).active) {
+        return ok('No saved compact state for this session.')
+      }
+      if (engine.reviews.isActive(agent.session)) {
+        return ok('Compact review is already active. Use /compact_edit <text>, /compact_apply, or /compact_abort.')
+      }
+      try {
+        await engine.compactNow(agent, signal, commandId)
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : String(error))
+      }
+      return ok('Compact mode restored; review re-entered.')
+    }
+
     const treeCommand: CommandDefinition['handler'] = async ({ agent }) => {
       let state
       try {
@@ -137,8 +154,8 @@ export function registerCompactCommands(ctx: Context, engine: CompactModeEngine)
 
     commands.register({
       name: 'compact',
-      description: 'Enter compact mode, or inspect the review tree',
-      input: { hint: '[tree|view <node>|jump <node>|diff <a> <b>]' },
+      description: 'Enter compact mode, restore a saved review, or inspect the review tree',
+      input: { hint: '[tree|view <node>|jump <node>|diff <a> <b>|restore]' },
       handler: async (invocation) => {
         const sub = invocation.rawInput.trim()
         if (sub === '') return enter(invocation)
@@ -146,7 +163,8 @@ export function registerCompactCommands(ctx: Context, engine: CompactModeEngine)
         if (sub.startsWith('view ')) return viewCommand(invocation)
         if (sub.startsWith('jump ')) return jumpCommand(invocation)
         if (sub.startsWith('diff ')) return diffCommand(invocation)
-        return fail(`Unknown /compact subcommand "${sub}". Supported: tree, view <node>, jump <node>, diff <a> <b>.`)
+        if (sub === 'restore') return restore(invocation)
+        return fail(`Unknown /compact subcommand "${sub}". Supported: tree, view <node>, jump <node>, diff <a> <b>, restore.`)
       },
     })
 

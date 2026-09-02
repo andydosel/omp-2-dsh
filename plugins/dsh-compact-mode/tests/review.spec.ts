@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { CompactModeEngine } from '../src/engine.ts'
-import { foldCompactMode } from '../src/mode.ts'
+
 import { makeAgent, makeContext } from './helpers.ts'
 
 describe('compact review lifecycle', () => {
@@ -30,7 +30,7 @@ describe('compact review lifecycle', () => {
     const start = events.find(e => e.type === 'compaction/start')
     expect(start).toBeDefined()
     expect(start!.data.turn).toBeNull()
-    expect(foldCompactMode(events)).toBe(true)
+    expect(engine.mode.get(agent).active).toBe(true)
 
     // Wait for the seed draft revision to land.
     await new Promise(r => setTimeout(r, 30))
@@ -46,7 +46,7 @@ describe('compact review lifecycle', () => {
     expect(replace).toBeDefined()
     expect(end).toBeDefined()
     expect(end!.data.error).toBeUndefined()
-    expect(foldCompactMode(after)).toBe(false)
+    expect(engine.mode.get(agent).active).toBe(false)
   })
 
   it('abort closes the lock with an error and preserves the mode exit', async () => {
@@ -68,6 +68,6 @@ describe('compact review lifecycle', () => {
     const end = after.find(e => e.type === 'compaction/end')
     expect(end).toBeDefined()
     expect(end!.data.error).toBe('user cancelled')
-    expect(foldCompactMode(after)).toBe(false)
+    expect(engine.mode.get(agent).active).toBe(false)
   })
 })
