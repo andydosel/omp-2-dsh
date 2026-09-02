@@ -6,6 +6,16 @@ packages:
 # ~/.dsh/profiles/web/node_modules/@dsh-plugin/ tree does.
 nodeLinker: hoisted
 
+# Pin cordis to the version the dsh 0.1.1-rc.2 monorepo vendors (4.0.1):
+# every rc.2 @deepseek-ai/dsh-* package peers ^4.0.1; letting the dev
+# workspace float to 4.0.2 skews the peer against the host's vendored 4.0.1.
+# The blanket dsh-* override pulls every transitive dsh peer (dsh-brand,
+# dsh-code-runtime, dsh-session-persistence, …) to the same rc.2 the host
+# builds against, so no peer is left on a stale 0.1.0-rc.x tuple.
+overrides:
+  "@deepseek-ai/cordis": 4.0.1
+  "@deepseek-ai/dsh-*": 0.1.1-rc.2
+
 # esbuild ships its platform binary via a postinstall; pnpm blocks unknown
 # build scripts by default, so allow it (vitest -> vite -> esbuild).
 allowBuilds:
