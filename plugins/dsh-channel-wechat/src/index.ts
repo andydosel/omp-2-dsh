@@ -112,6 +112,11 @@ export function apply(ctx: Context, config: import('./config.ts').Config): void 
     logger,
   })
 
+  // Expose the channel-global state to the mode-ui projection (no session
+  // event): `ctx.get('wechat').status()` returns { connected, account }.
+  ctx.provide('wechat', { status: () => adapter!.status() })
+
+
   // The poll loop lives for the plugin's lifetime; the disposer stops it
   // gracefully (aborts the in-flight long poll, drains debounce queues and
   // per-peer send tails) and tears down the owned per-peer agents.

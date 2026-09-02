@@ -165,7 +165,6 @@ export class WeChatAdapter {
       this.pollState.running = false
       this.pollState.lastError = String(error)
     })
-    this.emitChannelEvent(true)
   }
 
   /** Stop the poll loop, flush debounce queues, cancel pending media (hermes `disconnect`). */
@@ -183,25 +182,17 @@ export class WeChatAdapter {
       this.pollTask = undefined
     }
     await this.drainPeerTails()
-    this.emitChannelEvent(false)
   }
 
   /**
-   * Append the whole-value `wechat/channel` mirror to the chosen session
-   * (see {@link pickChannelSession}). With no live session to record it,
-   * the event is skipped with a log line — the next connect/disconnect while
-   * a session exists emits. The account is the adapter's single iLink
-   * account (v1: one account per instance; a future multi-account adapter
-   * emits on switch).
+   * The channel-global state (whether the poll loop is running and under which
+   * account). Replaces the old `wechat/channel` session-event mirror; the
+   * `wechatChannel` projection reads this getter.
    */
-  private emitChannelEvent(connected: boolean): void {
-    const session = pickChannelSession(this.ctx.sessions, this.sessionManager.managedSessionIds())
-    if (session === undefined) {
-      this.log('wechat: no live session to record channel status; wechat/channel event skipped')
-      return
-    }
-    session.append('wechat/channel', { connected, account: this.accountId })
+  status(): { connected: boolean; account: string } {
+    return { connected: this.running, account: this.accountId }
   }
+
 
   private async drainPeerTails(): Promise<void> {
     await Promise.allSettled([...this.peerTails.values()])

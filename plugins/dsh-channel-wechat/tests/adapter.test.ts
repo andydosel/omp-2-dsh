@@ -328,24 +328,21 @@ describe('pickChannelSession', () => {
   })
 })
 
-describe('wechat/channel status event', () => {
-  it('appends connected on connect and disconnected on disconnect', async () => {
+describe('wechat channel status (plugin-owned state)', () => {
+  it('reports connected on connect and disconnected on disconnect', async () => {
     const session = Session.create(SessionId('primary'))
     const { adapter } = makeHarness({}, undefined, undefined, {
       sessions: { get: () => session, list: () => [session] },
     })
     adapter.connect()
-    let events = session.events.filter(event => event.type === 'wechat/channel')
-    expect(events).toHaveLength(1)
-    expect(events[0]!.data).toEqual({ connected: true, account: ACCOUNT })
+    expect(adapter.status()).toEqual({ connected: true, account: ACCOUNT })
     await adapter.disconnect()
-    events = session.events.filter(event => event.type === 'wechat/channel')
-    expect(events.at(-1)!.data).toEqual({ connected: false, account: ACCOUNT })
+    expect(adapter.status()).toEqual({ connected: false, account: ACCOUNT })
   })
 
-  it('skips the event without throwing when no session can carry it', async () => {
+  it('stays disconnected when the poll loop never starts', async () => {
     const { adapter } = makeHarness({}, undefined, undefined, { sessions: { get: () => undefined, list: () => [] } })
-    // connect() must not throw when there is nowhere to record the status.
+    expect(adapter.status()).toEqual({ connected: false, account: ACCOUNT })
     adapter.connect()
     expect(adapter.pollState.running).toBe(true)
   })
