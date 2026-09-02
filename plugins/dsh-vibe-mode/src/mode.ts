@@ -138,15 +138,15 @@ export class VibeModeController extends Service {
     // clients the live roster. Activates only when a projection registry is
     // composed (headless assemblies stay unaffected).
     ctx.inject(['sessionProjections'], (projectionCtx) => {
-      projectionCtx.sessionProjections.register<'vibeWorkers', { workers: VibeWorkersProjection['workers'] }>({
+      projectionCtx.sessionProjections.register<'vibeWorkers', VibeWorkersProjection>({
         key: 'vibeWorkers',
-        schema: vibeWorkersSchema,
+        stateSchema: vibeWorkersSchema,
         init: () => ({ workers: [] }),
         apply: (state, event) => {
           if (event.type !== 'vibe/workers') return state
           return { workers: event.data.workers }
         },
-        view: state => ({ workers: state.workers }),
+        wire: { viewSchema: vibeWorkersSchema, view: state => ({ workers: state.workers }) },
         stateVersion: 1,
       })
     })

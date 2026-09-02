@@ -8,12 +8,9 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls dsh-vibe-mode's SessionEventMap merge (`vibe/mode`).
 import type {} from '@dsh-plugin/dsh-vibe-mode'
-import type { VibeModeProjection } from '../types.ts'
+import type { VibeModeProjection, VibeModeUnitState } from '../types.ts'
 
-/** Fold state of the vibeMode unit. */
-export interface VibeModeUnitState {
-  active: boolean
-}
+export type { VibeModeUnitState } from '../types.ts'
 
 /**
  * Pure transition: the last `vibe/mode` wins; any other event returns the

@@ -75,7 +75,11 @@ export const VibeModeConfigSchema: z<VibeModeConfig> = z.object({
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
-    /** The director's live worker roster, folded from `vibe/workers` whole-value events. */
+    /** The director's live worker roster, folded from the worker registry's runtime state. */
+    vibeWorkers: VibeWorkersProjection
+  }
+  interface SessionProjectionStateMap {
+    /** Host fold state of the `vibeWorkers` unit (state == wire value). */
     vibeWorkers: VibeWorkersProjection
   }
 }

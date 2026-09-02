@@ -1,11 +1,10 @@
 /**
  * dsh-mode-ui host half: registers the four mode-status projection units
- * (`compactMode` ← `compact/mode`, `vibeMode` ← `vibe/mode`,
- * `advisorStatus` ← `advisor/status`, `wechatChannel` ← `wechat/channel`)
- * on `ctx.sessionProjections`, following the plan-mode five-piece shape
- * (key/schema/init/apply/view/stateVersion). The unit child activates only
- * when a projection registry is composed, so headless assemblies without the
- * registry stay unaffected.
+ * (`compactMode`, `vibeMode`, `advisorStatus`, `wechatChannel`) on
+ * `ctx.sessionProjections`, following the rc.2 ProjectionDefinition shape
+ * (key/stateSchema/init/apply/wire/stateVersion). The unit child activates
+ * only when a projection registry is composed, so headless assemblies
+ * without the registry stay unaffected.
  *
  * The browser half (`client/src/`) is a separate `dsh.client` face of this
  * same package — see the package.json `dsh.client` declaration and
@@ -75,34 +74,34 @@ export function apply(ctx: Context): void {
     const registry = projectionCtx.sessionProjections
     registry.register<'compactMode', CompactModeUnitState>({
       key: 'compactMode',
-      schema: compactModeSchema,
+      stateSchema: compactModeSchema,
       init: () => ({ active: false }),
       apply: applyCompactModeEvent,
-      view: viewCompactMode,
+      wire: { viewSchema: compactModeSchema, view: viewCompactMode },
       stateVersion: 1,
     })
     registry.register<'vibeMode', VibeModeUnitState>({
       key: 'vibeMode',
-      schema: vibeModeSchema,
+      stateSchema: vibeModeSchema,
       init: () => ({ active: false }),
       apply: applyVibeModeEvent,
-      view: viewVibeMode,
+      wire: { viewSchema: vibeModeSchema, view: viewVibeMode },
       stateVersion: 1,
     })
     registry.register<'advisorStatus', AdvisorStatusUnitState>({
       key: 'advisorStatus',
-      schema: advisorStatusSchema,
+      stateSchema: advisorStatusSchema,
       init: () => ({ enabled: false, reviewers: 0 }),
       apply: applyAdvisorStatusEvent,
-      view: viewAdvisorStatus,
+      wire: { viewSchema: advisorStatusSchema, view: viewAdvisorStatus },
       stateVersion: 1,
     })
     registry.register<'wechatChannel', WechatChannelUnitState>({
       key: 'wechatChannel',
-      schema: wechatChannelSchema,
+      stateSchema: wechatChannelSchema,
       init: () => ({ connected: false }),
       apply: applyWechatChannelEvent,
-      view: viewWechatChannel,
+      wire: { viewSchema: wechatChannelSchema, view: viewWechatChannel },
       stateVersion: 1,
     })
   })

@@ -1,7 +1,7 @@
 /**
- * `compactMode` projection unit: folds the `compact/mode` whole-value events
- * dsh-compact-mode appends (log-only, last one wins). Pure mathematics only —
- * the session-projection registry drives this over committed session events.
+ * `compactMode` projection unit: folds the dsh-compact-mode runtime state
+ * (log-only, last one wins). Pure mathematics only — the session-projection
+ * registry drives this over committed session events.
  *
  * @module @dsh-plugin/dsh-mode-ui/projections/compact
  */
@@ -12,12 +12,9 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 // the host side collaborates with the sibling plugin through the session log
 // only.
 import type {} from '@dsh-plugin/dsh-compact-mode'
-import type { CompactModeProjection } from '../types.ts'
+import type { CompactModeProjection, CompactModeUnitState } from '../types.ts'
 
-/** Fold state of the compactMode unit. */
-export interface CompactModeUnitState {
-  active: boolean
-}
+export type { CompactModeUnitState } from '../types.ts'
 
 /**
  * Pure transition: the last `compact/mode` wins; any other event returns the

@@ -11,13 +11,9 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls dsh-channel-wechat's SessionEventMap merge
 // (`wechat/channel`).
 import type {} from '@dsh-plugin/dsh-channel-wechat'
-import type { WechatChannelProjection } from '../types.ts'
+import type { WechatChannelProjection, WechatChannelUnitState } from '../types.ts'
 
-/** Fold state of the wechatChannel unit. */
-export interface WechatChannelUnitState {
-  connected: boolean
-  account?: string
-}
+export type { WechatChannelUnitState } from '../types.ts'
 
 /**
  * Pure transition: whole-value replace on `wechat/channel`; any other event

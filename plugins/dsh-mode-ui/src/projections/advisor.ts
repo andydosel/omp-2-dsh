@@ -9,13 +9,9 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: pulls dsh-advisor's SessionEventMap merge (`advisor/status`).
 import type {} from '@dsh-plugin/dsh-advisor'
-import type { AdvisorStatusProjection } from '../types.ts'
+import type { AdvisorStatusProjection, AdvisorStatusUnitState } from '../types.ts'
 
-/** Fold state of the advisorStatus unit. */
-export interface AdvisorStatusUnitState {
-  enabled: boolean
-  reviewers: number
-}
+export type { AdvisorStatusUnitState } from '../types.ts'
 
 /**
  * Pure transition: whole-value replace on `advisor/status`; any other event
