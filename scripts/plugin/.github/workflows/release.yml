@@ -1,0 +1,67 @@
+# release.yml — SKELETON: build the dsh plugin suite on a version tag and attach
+# the produced zip to the GitHub Release.
+#
+# This is a starting point, NOT yet proven in CI. It mirrors what
+# plugin/release.ps1 does locally (build all 7 plugins, then zip), and it is the
+# automation the design doc proposes as the "build-on-tag -> upload asset" path.
+# Wire-up assumptions to verify before enabling:
+#   * The repo is the dsh-plugin repo root; this workflow lives under plugin/.
+#   * The runner can `pnpm install` each plugin (see the Install step notes).
+#   * A tag named v<version> is pushed; `gh release create` (or
+#     softprops/action-gh-release) attaches dsh-suite-<version>.zip to it.
+name: release-suite
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      # The root workspace manages tree-engine / compact-mode / vibe-mode only,
+      # while tool-read-write / advisor / channel-wechat / mode-ui each ship
+      # their own install. Install the root workspace AND each standalone plugin
+      # so `pnpm run build` works for every package. (Consider converging the
+      # repo on a single workspace to simplify this step.)
+      - name: Install
+        shell: pwsh
+        run: |
+          cd "${{ github.workspace }}/plugin"
+          pnpm install --frozen-lockfile
+          foreach ($p in @('dsh-tool-read-write','dsh-advisor','dsh-channel-wechat','dsh-mode-ui')) {
+            Push-Location $p
+            pnpm install --frozen-lockfile
+            Pop-Location
+          }
+
+      # Build all 7 + package the zip. Derive the bare version from the tag
+      # (strip the leading 'v') so the zip and Release tag stay in lockstep.
+      - name: Build and package
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}"
+          if ($ver.StartsWith('v')) { $ver = $ver.Substring(1) }
+          & "${{ github.workspace }}/plugin/release.ps1" -Version $ver -OutputDir "${{ github.workspace }}/plugin/release"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Attach asset to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: plugin/release/dsh-suite-*.zip
+          generate_release_notes: true

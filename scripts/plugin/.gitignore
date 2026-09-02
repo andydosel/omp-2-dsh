@@ -1,0 +1,6 @@
+# Build/package outputs produced by release.ps1 (git cannot carry built lib/,
+# and the zip is only a GitHub Release asset — never commit it).
+release/
+dist/
+*.zip
+*.tgz
