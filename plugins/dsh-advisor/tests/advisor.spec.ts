@@ -34,6 +34,8 @@ let primary: Agent
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), 'advisor-runtime-'))
+  // Isolate the plugin-owned advisor-state JSON snapshot per test.
+  process.env.DSH_HOME = tmp
   ctx = new FakeContext()
 })
 
@@ -523,9 +525,7 @@ describe('reset signals', () => {
     expect(ctx.createSpy).toHaveBeenCalledTimes(1)
 
     // Build a two-node surface, then replace the first node with a summary.
-    // (The bound advisor now logs `advisor/status` at the head of the
-    // session, so node 0 is not necessarily seq 0 — target the first
-    // surface node explicitly.)
+    // Target the first surface node explicitly (seq positions are not assumed).
     const first = appendUserMessage(primary.session, 'original')
     ctx.emit('session/event', primary.session, first)
     const second = appendUserMessage(primary.session, 'second')
@@ -655,22 +655,19 @@ describe('enable/disable', () => {
   })
 })
 
-describe('advisor/status session event', () => {
-  it('appends the whole-value status on primary bind', async () => {
+describe('advisor status (plugin-owned state)', () => {
+  it('reports the whole-value state on primary bind', async () => {
     attach(makeConfig({ enabled: false }))
     primary = makePrimary()
     ctx.emit('agent/created', { agent: primary })
     await flush()
-    const statuses = primary.session.events.filter(event => event.type === 'advisor/status')
-    expect(statuses).toHaveLength(1)
-    expect(statuses[0]!.data).toEqual({ enabled: false, reviewers: 0 })
+    expect(runtime.status()).toEqual({ enabled: false, reviewers: 0 })
   })
 
   it('reports the live reviewer count after reviewers start', async () => {
     attach()
     await bindPrimary()
-    const statuses = primary.session.events.filter(event => event.type === 'advisor/status')
-    expect(statuses.at(-1)!.data).toEqual({ enabled: true, reviewers: 1 })
+    expect(runtime.status()).toEqual({ enabled: true, reviewers: 1 })
   })
 
   it('reports disabled with zero reviewers on disable', async () => {
@@ -678,8 +675,7 @@ describe('advisor/status session event', () => {
     await bindPrimary()
     runtime.disable()
     await flush()
-    const statuses = primary.session.events.filter(event => event.type === 'advisor/status')
-    expect(statuses.at(-1)!.data).toEqual({ enabled: false, reviewers: 0 })
+    expect(runtime.status()).toEqual({ enabled: false, reviewers: 0 })
   })
 })
 

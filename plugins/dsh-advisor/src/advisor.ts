@@ -32,6 +32,7 @@ import { EmissionGuard } from './emission-guard.ts'
 import type { Severity } from './severity.ts'
 import { isInterrupting, isSeverity } from './severity.ts'
 import { discoverWatchdog, renderWatchdogGuidance, type WatchdogSource } from './watchdog.ts'
+import { AdvisorStore, type AdvisorState } from './state-store.ts'
 
 /** One reviewer's validated spec (roster entry or the default reviewer). */
 export interface ReviewerSpec {
@@ -137,6 +138,9 @@ export class AdvisorRuntime {
   private readonly guard = new EmissionGuard()
   private readonly adviseCalls = new Map<string, AdviseArgs>()
 
+  /** Plugin-owned advisor state (enabled flag + reviewer count), persisted. */
+  readonly store = new AdvisorStore()
+
   constructor(
     private readonly ctx: Context,
     private readonly config: ResolvedAdvisorConfig,
@@ -144,6 +148,18 @@ export class AdvisorRuntime {
     this.enabled = config.enabled
     this.observer = new DeltaObserver(event => this.isOwnMessage(event))
     this.delivery = new DeliveryController({ immuneTurns: config.immuneTurns })
+    // Re-seed a persisted runtime `enabled` (a `/advisor on` survives restart),
+    // but only when a snapshot was actually loaded — never override config.
+    void this.store.load().then(() => {
+      if (!this.store.hasSnapshot) return
+      this.enabled = this.store.current().enabled
+      this.emitStatus()
+      if (this.enabled && this.primary !== undefined && this.phase === 'idle') {
+        void this.start()
+      }
+    }).catch((error: unknown) => {
+      ctx.logger.warn('dsh-advisor: failed to load advisor state snapshot: %o', error)
+    })
   }
 
   /** Register every root-ctx listener. Idempotent. */
@@ -230,20 +246,21 @@ export class AdvisorRuntime {
   }
 
   /**
-   * Append the whole-value `advisor/status` mirror to the bound primary
-   * session. The advisor always binds to one primary session (the first
-   * agent matching the config, `config.agentId` default ""), so the status
-   * lands on that session's log; without a bound session there is nowhere to
-   * append and the next bind emits. A disabled advisor reports zero
+   * Publish the whole-value advisor state to the plugin-owned store (the UI
+   * badge's `advisorStatus` projection reads it). Replaces the old
+   * `advisor/status` session-event mirror. A disabled advisor reports zero
    * reviewers (the dispose is in flight or already done).
    */
   private emitStatus(): void {
-    const session = this.primary?.session
-    if (session === undefined) return
-    session.append('advisor/status', {
+    this.store.set({
       enabled: this.enabled,
       reviewers: this.enabled ? this.reviewers.size : 0,
     })
+  }
+
+  /** The current advisor state (the `advisorStatus` projection's read). */
+  status(): AdvisorState {
+    return this.store.current()
   }
 
   // ---- primary binding ----

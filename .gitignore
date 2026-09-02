@@ -13,3 +13,7 @@ dist/
 
 # scratch / experiment output
 .e2e-scratch/
+
+# plugin-owned mode-state JSON snapshots (cwd fallback when DSH_HOME is unset)
+.*-state.json
+.*-state.json.tmp
