@@ -1,114 +1,71 @@
 /**
- * Pure folding tests for the four mode-status projection units. The units
- * are pure mathematics over committed session events — no cordis context, no
- * session store, no mocks: construct events, fold, assert the wire view.
+ * Tests for the four mode-status projection units: the pure read-side views
+ * and the service-driven `apply` transitions (re-sourced from the sibling
+ * plugins' plugin-owned state, no session events).
  */
 
 import { describe, expect, it } from 'vitest'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { applyCompactModeEvent, viewCompactMode } from '../src/projections/compact.ts'
-import { applyVibeModeEvent, viewVibeMode } from '../src/projections/vibe.ts'
-import { applyAdvisorStatusEvent, viewAdvisorStatus } from '../src/projections/advisor.ts'
-import { applyWechatChannelEvent, viewWechatChannel } from '../src/projections/wechat.ts'
+import { Context } from '@deepseek-ai/cordis'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
+import { apply } from '../src/index.ts'
+import { viewCompactMode } from '../src/projections/compact.ts'
+import { viewVibeMode } from '../src/projections/vibe.ts'
+import { viewAdvisorStatus } from '../src/projections/advisor.ts'
+import { viewWechatChannel } from '../src/projections/wechat.ts'
 
-/** Minimal event builder; the fold functions only read type/data. */
-function event(type: string, data: unknown, seq = 1): SessionEvent {
-  return { type, seq, time: 1_000, data } as unknown as SessionEvent
-}
-
-describe('compactMode unit', () => {
-  it('folds to inactive on an empty log', () => {
+describe('view functions (pure state → wire)', () => {
+  it('compactMode', () => {
+    expect(viewCompactMode({ active: true })).toEqual({ active: true })
     expect(viewCompactMode({ active: false })).toEqual({ active: false })
   })
 
-  it('flips on compact/mode active:true and back to false', () => {
-    let state = { active: false }
-    state = applyCompactModeEvent(state, event('compact/mode', { active: true }, 1))
-    expect(viewCompactMode(state)).toEqual({ active: true })
-    state = applyCompactModeEvent(state, event('compact/mode', { active: false }, 2))
-    expect(viewCompactMode(state)).toEqual({ active: false })
+  it('vibeMode', () => {
+    expect(viewVibeMode({ active: true })).toEqual({ active: true })
   })
 
-  it('keeps the same reference for unrelated events (zero downstream work)', () => {
-    const state = { active: true }
-    expect(applyCompactModeEvent(state, event('user/message', {}, 1))).toBe(state)
-    expect(applyCompactModeEvent(state, event('vibe/mode', { active: true }, 2))).toBe(state)
+  it('advisorStatus', () => {
+    expect(viewAdvisorStatus({ enabled: true, reviewers: 2 })).toEqual({ enabled: true, reviewers: 2 })
   })
 
-  it('the last compact/mode wins across interleaved events', () => {
-    let state = { active: false }
-    state = applyCompactModeEvent(state, event('user/message', {}, 1))
-    state = applyCompactModeEvent(state, event('compact/mode', { active: true }, 2))
-    state = applyCompactModeEvent(state, event('turn/end', { turn: 1 }, 3))
-    state = applyCompactModeEvent(state, event('compact/mode', { active: true }, 4))
-    expect(viewCompactMode(state)).toEqual({ active: true })
-    state = applyCompactModeEvent(state, event('compact/mode', { active: false }, 5))
-    expect(viewCompactMode(state)).toEqual({ active: false })
-  })
-})
-
-describe('vibeMode unit', () => {
-  it('folds to inactive on an empty log', () => {
-    expect(viewVibeMode({ active: false })).toEqual({ active: false })
-  })
-
-  it('flips on vibe/mode active:true and back to false', () => {
-    let state = { active: false }
-    state = applyVibeModeEvent(state, event('vibe/mode', { active: true }, 1))
-    expect(viewVibeMode(state)).toEqual({ active: true })
-    state = applyVibeModeEvent(state, event('vibe/mode', { active: false }, 2))
-    expect(viewVibeMode(state)).toEqual({ active: false })
-  })
-
-  it('keeps the same reference for unrelated events', () => {
-    const state = { active: true }
-    expect(applyVibeModeEvent(state, event('compact/mode', { active: true }, 1))).toBe(state)
-  })
-})
-
-describe('advisorStatus unit', () => {
-  it('folds to disabled with zero reviewers on an empty log', () => {
-    expect(viewAdvisorStatus({ enabled: false, reviewers: 0 })).toEqual({ enabled: false, reviewers: 0 })
-  })
-
-  it('whole-value replaces on advisor/status events', () => {
-    let state = { enabled: false, reviewers: 0 }
-    state = applyAdvisorStatusEvent(state, event('advisor/status', { enabled: true, reviewers: 2 }, 1))
-    expect(viewAdvisorStatus(state)).toEqual({ enabled: true, reviewers: 2 })
-    state = applyAdvisorStatusEvent(state, event('advisor/status', { enabled: true, reviewers: 1 }, 2))
-    expect(viewAdvisorStatus(state)).toEqual({ enabled: true, reviewers: 1 })
-    state = applyAdvisorStatusEvent(state, event('advisor/status', { enabled: false, reviewers: 0 }, 3))
-    expect(viewAdvisorStatus(state)).toEqual({ enabled: false, reviewers: 0 })
-  })
-
-  it('keeps the same reference for unrelated events', () => {
-    const state = { enabled: true, reviewers: 3 }
-    expect(applyAdvisorStatusEvent(state, event('compact/mode', { active: true }, 1))).toBe(state)
-  })
-})
-
-describe('wechatChannel unit', () => {
-  it('folds to disconnected on an empty log', () => {
+  it('wechatChannel (account optional)', () => {
+    expect(viewWechatChannel({ connected: true, account: 'acct' })).toEqual({ connected: true, account: 'acct' })
     expect(viewWechatChannel({ connected: false })).toEqual({ connected: false })
   })
+})
 
-  it('whole-value replaces on wechat/channel events with an account', () => {
-    let state = { connected: false }
-    state = applyWechatChannelEvent(state, event('wechat/channel', { connected: true, account: 'c5610f3ce386@im.bot' }, 1))
-    expect(viewWechatChannel(state)).toEqual({ connected: true, account: 'c5610f3ce386@im.bot' })
-    state = applyWechatChannelEvent(state, event('wechat/channel', { connected: false, account: 'c5610f3ce386@im.bot' }, 2))
-    expect(viewWechatChannel(state)).toEqual({ connected: false, account: 'c5610f3ce386@im.bot' })
-  })
+describe('projection apply (reads sibling plugin state)', () => {
+  it('folds each projection from the sibling service, re-syncing on committed events', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    let compact = { active: false }
+    let vibe = { active: false }
+    let advisor = { enabled: false, reviewers: 0 }
+    let wechat = { connected: false, account: undefined as string | undefined }
+    ctx.provide('compactMode', { store: { current: () => compact } })
+    ctx.provide('vibeMode', { store: { current: () => vibe } })
+    ctx.provide('advisor', { runtime: { status: () => advisor } })
+    ctx.provide('wechat', { status: () => wechat })
+    await ctx.plugin({ apply })
+    const session = Session.create(SessionId('proj-session'))
+    const snap = () => ctx.sessionProjections.snapshot(session).values
+    // Empty log: each unit's init() state.
+    expect(snap().compactMode).toEqual({ active: false })
+    expect(snap().vibeMode).toEqual({ active: false })
+    expect(snap().advisorStatus).toEqual({ enabled: false, reviewers: 0 })
+    expect(snap().wechatChannel).toEqual({ connected: false })
 
-  it('an event without an account drops the previous one (whole-value semantics)', () => {
-    let state = { connected: false }
-    state = applyWechatChannelEvent(state, event('wechat/channel', { connected: true, account: 'a@im.bot' }, 1))
-    state = applyWechatChannelEvent(state, event('wechat/channel', { connected: true }, 2))
-    expect(viewWechatChannel(state)).toEqual({ connected: true })
-  })
+    // Flip the sibling state, then drive a committed event.
+    compact = { active: true }
+    vibe = { active: true }
+    advisor = { enabled: true, reviewers: 1 }
+    wechat = { connected: true, account: 'acct' }
+    const event = session.append('turn/start', { turn: 1 })
+    ctx.emit('session/event', session, event)
 
-  it('keeps the same reference for unrelated events', () => {
-    const state = { connected: true, account: 'a@im.bot' }
-    expect(applyWechatChannelEvent(state, event('advisor/status', { enabled: true, reviewers: 0 }, 1))).toBe(state)
+    expect(snap().compactMode).toEqual({ active: true })
+    expect(snap().vibeMode).toEqual({ active: true })
+    expect(snap().advisorStatus).toEqual({ enabled: true, reviewers: 1 })
+    expect(snap().wechatChannel).toEqual({ connected: true, account: 'acct' })
   })
 })

@@ -1,35 +1,15 @@
 /**
- * `wechatChannel` projection unit: folds the `wechat/channel` whole-value
- * events dsh-channel-wechat appends on connect/disconnect/account change.
- * `account` is carried only when the channel reports one (the single-account
- * adapter always does). Pure mathematics only.
+ * `wechatChannel` projection unit: the read-side view. The `apply` transition
+ * is re-sourced in `src/index.ts` to read the sibling dsh-channel-wechat
+ * adapter status (the connected/account state is plugin-owned, not a session
+ * event).
  *
  * @module @dsh-plugin/dsh-mode-ui/projections/wechat
  */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-// Type-only: pulls dsh-channel-wechat's SessionEventMap merge
-// (`wechat/channel`).
-import type {} from '@dsh-plugin/dsh-channel-wechat'
 import type { WechatChannelProjection, WechatChannelUnitState } from '../types.ts'
 
 export type { WechatChannelUnitState } from '../types.ts'
-
-/**
- * Pure transition: whole-value replace on `wechat/channel`; any other event
- * returns the same state reference (zero downstream work). An absent
- * `account` drops the previous one (whole-value semantics).
- */
-export function applyWechatChannelEvent(state: WechatChannelUnitState, event: SessionEvent): WechatChannelUnitState {
-  if (event.type !== 'wechat/channel') return state
-  const { connected, account } = event.data
-  if (account === undefined) {
-    return connected === state.connected && state.account === undefined
-      ? state
-      : { connected }
-  }
-  return connected === state.connected && account === state.account ? state : { connected, account }
-}
 
 /** State → wire payload (the read-side projection). */
 export function viewWechatChannel(state: WechatChannelUnitState): WechatChannelProjection {

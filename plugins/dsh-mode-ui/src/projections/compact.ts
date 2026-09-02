@@ -1,29 +1,14 @@
 /**
- * `compactMode` projection unit: folds the dsh-compact-mode runtime state
- * (log-only, last one wins). Pure mathematics only — the session-projection
- * registry drives this over committed session events.
+ * `compactMode` projection unit: the read-side view. The `apply` transition is
+ * re-sourced in `src/index.ts` to read the sibling dsh-compact-mode store (the
+ * mode flag is plugin-owned state, not a session event).
  *
  * @module @dsh-plugin/dsh-mode-ui/projections/compact
  */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-// Type-only: pulls dsh-compact-mode's SessionEventMap merge (`compact/mode`)
-// so the discriminated-union narrowing below is typed. Erased at build time;
-// the host side collaborates with the sibling plugin through the session log
-// only.
-import type {} from '@dsh-plugin/dsh-compact-mode'
 import type { CompactModeProjection, CompactModeUnitState } from '../types.ts'
 
 export type { CompactModeUnitState } from '../types.ts'
-
-/**
- * Pure transition: the last `compact/mode` wins; any other event returns the
- * same state reference (zero downstream work).
- */
-export function applyCompactModeEvent(state: CompactModeUnitState, event: SessionEvent): CompactModeUnitState {
-  if (event.type !== 'compact/mode') return state
-  return event.data.active === state.active ? state : { active: event.data.active }
-}
 
 /** State → wire payload (the read-side projection). */
 export function viewCompactMode(state: CompactModeUnitState): CompactModeProjection {
