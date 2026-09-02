@@ -1,0 +1,12 @@
+packages:
+  - plugins/*
+
+# hoisted node_modules so the Cordis loader resolves each plugin's host entry
+# (and the two client bundles) by package name the same way the released
+# ~/.dsh/profiles/web/node_modules/@dsh-plugin/ tree does.
+nodeLinker: hoisted
+
+# esbuild ships its platform binary via a postinstall; pnpm blocks unknown
+# build scripts by default, so allow it (vitest -> vite -> esbuild).
+allowBuilds:
+  esbuild: true

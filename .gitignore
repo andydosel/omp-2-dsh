@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# build output
+lib/
+*.tsbuildinfo
+
+# release packaging (produced by scripts/release.ps1; the zip is a Release asset)
+release/
+dist/
+*.zip
+*.tgz
+
+# scratch / experiment output
+.e2e-scratch/
