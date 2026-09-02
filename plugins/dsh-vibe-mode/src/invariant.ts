@@ -1,8 +1,18 @@
-/** Package-owned durable vibe-mode invariants. @module @dsh-plugin/dsh-vibe-mode/invariant */
+/**
+ * Package-owned durable vibe-mode invariants.
+ *
+ * Plugin-only rework: the plugin no longer appends `vibe/mode` / `vibe/workers`
+ * session events (the active flag and worker roster live in the plugin-owned
+ * store), so there are no custom session events left to validate. The companion
+ * still registers with the invariants service (a package that declares
+ * `./invariant` must provide the companion contract), but its installer is a
+ * no-op.
+ *
+ * @module @dsh-plugin/dsh-vibe-mode/invariant
+ */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
+import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
 const PACKAGE_NAME = '@dsh-plugin/dsh-vibe-mode'
 
@@ -12,32 +22,10 @@ export const name = 'vibe-mode-invariant'
 export const inject = ['invariants']
 
 /**
- * Validate one `vibe/mode` event before it reaches the durable log.
- * `vibe/mode` is a standalone whole-value event: an idle selection commits
- * between turns and a mid-turn selection commits at the step boundary, so
- * no turn-enclosure relation exists — only the payload shape is checkable.
+ * Install a no-op invariant companion: plugin-owned state carries no session
+ * events, so nothing needs validation.
  */
-function validateEvent(event: SessionEvent, fail: InvariantFailure): void {
-  if (event.type !== 'vibe/mode') return
-  const active = (event.data as { active?: unknown }).active
-  if (typeof active !== 'boolean') {
-    fail(`vibe/mode carries invalid active state ${JSON.stringify(active)}; expected a boolean`)
-  }
-}
-
-/** Install validation for loaded and newly appended vibe-mode state. */
-const install: InvariantInstaller = Object.assign((ctx: Context, fail: InvariantFailure) => {
-  const seed = (session: Session): void => {
-    for (const event of session.events) validateEvent(event, fail)
-  }
-  for (const session of ctx.sessions.list()) seed(session)
-  ctx.on('session/created', (session) => { seed(session) }, { global: true })
-  ctx.on('internal/dispatch', (_mode, eventName, args) => {
-    if (eventName !== 'session/event') return
-    const [, event] = args as [Session, SessionEvent]
-    validateEvent(event, fail)
-  }, { global: true })
-}, { inject: ['sessions'] })
+const install: InvariantInstaller = Object.assign(() => {}, { inject: [] })
 
 /**
  * Register the vibe-mode invariant companion.

@@ -1,11 +1,11 @@
 /**
- * Vibe-mode shared types: deployment config, tier routes, and the fold over
- * the logged `vibe/mode` event.
+ * Vibe-mode shared types: deployment config, tier routes, and the plugin-owned
+ * state shapes. The active flag and worker roster are no longer session
+ * events — they live in the plugin's own store (see `state-store.ts`).
  *
  * @module @dsh-plugin/dsh-vibe-mode/types
  */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 
 /** The two worker tiers a director can spawn. */
@@ -45,7 +45,7 @@ export interface VibeWorkerView {
   lastActivity?: string
 }
 
-/** The whole-value payload of the `vibe/workers` session event. */
+/** The whole-value worker roster (the `vibeWorkers` projection wire value). */
 export interface VibeWorkersProjection {
   workers: VibeWorkerView[]
 }
@@ -81,25 +81,6 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
     /** Host fold state of the `vibeWorkers` unit (state == wire value). */
     vibeWorkers: VibeWorkersProjection
-  }
-}
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /**
-     * Whether DIRECTOR mode is in force from this point on: log-only,
-     * non-surface, whole-value replace. The last `vibe/mode` wins; a log with
-     * none folds to inactive through {@link foldVibeMode}.
-     */
-    'vibe/mode': { active: boolean }
-    /**
-     * The director's live worker roster: log-only, non-surface, whole-value
-     * replace, appended whenever the registry changes (spawn, send, kill,
-     * turn-start/turn-end transitions, mode exit). Folds into the
-     * `vibeWorkers` projection; the persistence catalog entry for this type
-     * lives in the monorepo annex (added by the parallel annex worker).
-     */
-    'vibe/workers': { workers: VibeWorkerView[] }
   }
 }
 
@@ -255,21 +236,4 @@ export function resolveConfig(config: VibeModeConfig): ResolvedVibeModeConfig {
   }
 }
 
-/**
- * Whether vibe mode is in force after the first `end` events. The last
- * `vibe/mode` wins; a prefix with none is inactive.
- *
- * @param events The session log or any prefix of it.
- * @param end Fold `events[0, end)`; defaults to the whole log.
- * @returns Whether vibe mode is active.
- */
-export function foldVibeMode(events: readonly SessionEvent[], end = events.length): boolean {
-  let active = false
-  let index = 0
-  for (const event of events) {
-    if (index >= end) break
-    index++
-    if (event.type === 'vibe/mode') active = event.data.active
-  }
-  return active
-}
+

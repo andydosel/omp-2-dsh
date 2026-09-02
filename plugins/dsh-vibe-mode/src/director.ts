@@ -12,7 +12,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ResolvedVibeModeConfig } from './types.ts'
-import { foldVibeMode } from './types.ts'
+import type { VibeModeStore } from './state-store.ts'
 import { WorkerRegistry } from './workers.ts'
 import { defineVibeTools } from './tools.ts'
 
@@ -54,6 +54,9 @@ export interface DirectorScope {
  * @param ctx - plugin root ctx (services resolve through `agent.ctx`).
  * @param agent - the director to narrow.
  * @param config - validated deployment config.
+ * @param store - the plugin-owned state store: the section text reads its
+ *   per-session active flag, and the worker registry publishes the roster to
+ *   it (no session events).
  * @param sectionSource - live DIRECTOR-instructions text; defaults to the
  *   frozen config, and the controller swaps in the settings-backed thunk
  *   (settings override → config → shipped default) once the settings seam
@@ -65,10 +68,13 @@ export function applyDirectorScope(
   ctx: Context,
   agent: Agent,
   config: ResolvedVibeModeConfig,
+  store: VibeModeStore,
   sectionSource: () => string = () => config.section,
 ): DirectorScope {
   const disposers: Array<() => void> = []
-  const registry = new WorkerRegistry(ctx, agent, config.maxConsecutiveWakes)
+  const registry = new WorkerRegistry(ctx, agent, config.maxConsecutiveWakes, (workers) => {
+    store.setWorkers(agent.session.id, workers)
+  })
 
   try {
     // 1. Mask the inherited toolset. Intersect the configured allow-list with
@@ -101,17 +107,18 @@ export function applyDirectorScope(
     for (const tool of defineVibeTools(ctx, registry, config)) {
       disposers.push(agent.ctx.tools.register(tool))
     }
-    // 4. The DIRECTOR instructions, fold-driven: the text renders only while
-    // the session log says vibe mode is active (resume/fork restore it).
+    // 4. The DIRECTOR instructions, state-driven: the text renders only while
+    // the plugin-owned store says this session is active (resume/fork restore
+    // it via the same store read).
     disposers.push(agent.ctx.systemPrompt.section({
       name: DIRECTOR_SECTION_NAME,
       order: DIRECTOR_SECTION_ORDER,
       text: (context) => {
         const subject = context.agent ?? agent
-        return foldVibeMode(subject.session.events) ? sectionSource() : ''
+        return store.get(subject.session.id).active ? sectionSource() : ''
       },
     }))
-    // 5. The delegation-loop tool guidance, fold-driven with the same state:
+    // 5. The delegation-loop tool guidance, state-driven with the same flag:
     // a short reminder beside the tool catalog (order 150) that the five
     // vibe tools exist and that the director only briefs, reviews, and merges.
     disposers.push(agent.ctx.systemPrompt.section({
@@ -119,7 +126,7 @@ export function applyDirectorScope(
       order: DIRECTOR_TOOL_GUIDANCE_ORDER,
       text: (context) => {
         const subject = context.agent ?? agent
-        return foldVibeMode(subject.session.events) ? DIRECTOR_TOOL_GUIDANCE_TEXT : ''
+        return store.get(subject.session.id).active ? DIRECTOR_TOOL_GUIDANCE_TEXT : ''
       },
     }))
   } catch (error) {

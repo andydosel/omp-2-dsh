@@ -1,14 +1,14 @@
 /**
- * Vibe-mode state machine: logged `vibe/mode` state, pending selections, the
- * step-boundary commit, narration, and the plan/compact mutex. Mirrors
- * `@deepseek-ai/dsh-plan-mode`'s controller shape: the state in force is
- * folded from the session log, selections remain pending until the next
- * accepted in-turn pre-step, and the `vibe/mode` event is appended from
- * `agent/pre-step` only when the step is accepted.
+ * Vibe-mode state machine: plugin-owned active state (no `vibe/mode` session
+ * event), pending selections, the step-boundary commit, narration, and the
+ * plan/compact mutex. Mirrors `@deepseek-ai/dsh-plan-mode`'s controller shape:
+ * the state in force is read from the plugin-owned store, selections remain
+ * pending until the next accepted in-turn pre-step, and the change is
+ * applied at `agent/pre-step` only when the step is accepted.
  *
  * The controller IS the plugin (plan-mode pattern): it also owns the `/vibe`
- * command, the per-director narrowing lifecycle (through
- * {@link applyDirectorScope}), and the worker park/drain lifecycle.
+ * command (including `/vibe restore`), the per-director narrowing lifecycle
+ * (through {@link applyDirectorScope}), and the worker park/drain lifecycle.
  *
  * @module @dsh-plugin/dsh-vibe-mode/mode
  */
@@ -26,13 +26,13 @@ import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import {
   DEFAULT_DIRECTOR_SECTION,
-  foldVibeMode,
   resolveConfig,
   VibeModeConfigSchema,
   type ResolvedVibeModeConfig,
   type VibeModeConfig,
   type VibeWorkersProjection,
 } from './types.ts'
+import { VibeModeStore } from './state-store.ts'
 import { applyDirectorScope, type DirectorScope } from './director.ts'
 
 /** Whether the log holds an opened turn without its closing `turn/end`. */
@@ -45,19 +45,8 @@ function hasOpenTurn(events: readonly SessionEvent[]): boolean {
   return open
 }
 
-/** Vibe state at the last logged request header, or `undefined` before the first header. */
-function vibeModeAtLastHeader(events: readonly SessionEvent[]): boolean | undefined {
-  let lastHeader = -1
-  let index = 0
-  for (const event of events) {
-    if (event.type === 'request/header') lastHeader = index
-    index++
-  }
-  if (lastHeader < 0) return undefined
-  return foldVibeMode(events, lastHeader + 1)
-}
-
 /**
+
  * The structural mutex probe for a sibling mode service. Read through
  * `ctx.get(name)` with this cast — the sibling owns the Context declaration,
  * so an optional structural placeholder here cannot conflict on interface
@@ -106,6 +95,15 @@ export class VibeModeController extends Service {
    */
   private sectionSource: () => string
 
+  /** Plugin-owned mode state (active flag + worker roster), persisted to JSON. */
+  readonly store = new VibeModeStore()
+
+  /**
+   * The last mode the controller narrated to the model, per session. Undefined
+   * until the first change; session-start seeds it from the store (resume).
+   */
+  private readonly lastNarrated = new WeakMap<Session, boolean>()
+
   /**
    * Latest selection per session awaiting the next accepted in-turn pre-step.
    * `narrate` is true for user selections (the `/vibe` command).
@@ -119,6 +117,9 @@ export class VibeModeController extends Service {
     super(ctx, 'vibeMode')
     this.config = resolveConfig(config)
     this.sectionSource = () => this.config.section
+    void this.store.load().catch((error: unknown) => {
+      ctx.logger.warn('dsh-vibe-mode: failed to load mode state snapshot: %o', error)
+    })
 
     // Runtime DIRECTOR-instructions settings: the `dsh-vibe-mode` namespace
     // resolves settings-user-layer → composition config (base) → schema
@@ -133,18 +134,19 @@ export class VibeModeController extends Service {
       onChange: () => {},
     })
 
-    // The `vibeWorkers` projection unit (session-projection RFC): folds the
-    // whole-value `vibe/workers` events the worker registry appends, serving
-    // clients the live roster. Activates only when a projection registry is
-    // composed (headless assemblies stay unaffected).
+    // The `vibeWorkers` projection unit (session-projection RFC): serves
+    // clients the live roster from the plugin-owned store (no session event).
+    // The projection is session-agnostic, so `apply` re-syncs from the store's
+    // current roster on every committed event and returns the same reference
+    // when unchanged (the registry's Object.is gate).
     ctx.inject(['sessionProjections'], (projectionCtx) => {
       projectionCtx.sessionProjections.register<'vibeWorkers', VibeWorkersProjection>({
         key: 'vibeWorkers',
         stateSchema: vibeWorkersSchema,
-        init: () => ({ workers: [] }),
-        apply: (state, event) => {
-          if (event.type !== 'vibe/workers') return state
-          return { workers: event.data.workers }
+        init: () => ({ workers: this.store.current().workers }),
+        apply: (state) => {
+          const workers = this.store.current().workers
+          return workers === state.workers ? state : { workers }
         },
         wire: { viewSchema: vibeWorkersSchema, view: state => ({ workers: state.workers }) },
         stateVersion: 1,
@@ -178,13 +180,13 @@ export class VibeModeController extends Service {
     ctx.inject(['commands'], (commandCtx) => {
       commandCtx.commands.register({
         name: 'vibe',
-        description: 'Enter or leave DIRECTOR mode (workers: vibe_spawn/send/wait/kill/list)',
-        input: { hint: '[on|off|off --terminate]' },
+        description: 'Enter, leave, or restore DIRECTOR mode (workers: vibe_spawn/send/wait/kill/list)',
+        input: { hint: '[on|off|off --terminate|restore]' },
         handler: async ({ agent, rawInput }) => {
           const message = rawInput.trim()
           if (message === 'off' || message === 'off --terminate') {
             const scope = this.scopes.get(agent)
-            if (scope === undefined && !foldVibeMode(agent.session.events)) {
+            if (scope === undefined && !this.store.get(agent.session.id).active) {
               this.set(agent, false)
               return { kind: 'success' as const, text: 'Vibe mode is already inactive.' }
             }
@@ -213,11 +215,27 @@ export class VibeModeController extends Service {
                 : 'Vibe mode off; workers parked.'
             return { kind: 'success' as const, text }
           }
+          // One-click restore: re-apply the runtime scope (narrowing + sections)
+          // and re-attach the persisted worker roster for a session whose saved
+          // state is active. Idempotent.
+          if (message === 'restore') {
+            if (this.store.get(agent.session.id).active) {
+              if (this.scopes.get(agent) === undefined) {
+                const scope = applyDirectorScope(ctx, agent, this.config, this.store, this.sectionSource)
+                scope.registry.seed(this.store.get(agent.session.id).workers)
+                this.scopes.set(agent, scope)
+              }
+              return { kind: 'success' as const, text: 'DIRECTOR mode restored: toolset narrowed; workers re-attached.' }
+            }
+            return { kind: 'success' as const, text: 'No saved DIRECTOR state for this session.' }
+          }
           // Enter: mutex conflicts throw and surface as the command error.
           try {
             const outcome = this.set(agent, true)
             if (this.scopes.get(agent) === undefined) {
-              this.scopes.set(agent, applyDirectorScope(ctx, agent, this.config, this.sectionSource))
+              const scope = applyDirectorScope(ctx, agent, this.config, this.store, this.sectionSource)
+              scope.registry.seed(this.store.get(agent.session.id).workers)
+              this.scopes.set(agent, scope)
             }
             const text = outcome === 'queued'
               ? 'Entering DIRECTOR mode (applies from the next step).'
@@ -233,14 +251,19 @@ export class VibeModeController extends Service {
       })
     })
 
-    // Resume/fork restore: a director session whose log says vibe mode is
-    // active gets its narrowing re-applied (the scoped registrations died with
-    // the previous agent). Workers restore themselves via the persisted
-    // `subagent/descriptor`; this restores the director's own tool surface.
+    // Resume/fork restore: a director session whose plugin-owned state says
+    // vibe mode is active gets its narrowing re-applied (the scoped
+    // registrations died with the previous agent), and the worker roster is
+    // seeded from the persisted snapshot. Workers restore themselves via the
+    // persisted `subagent/descriptor`; this restores the director's own tool
+    // surface and the dock roster.
     ctx.on('agent/session-start', ({ agent }) => {
-      if (!foldVibeMode(agent.session.events)) return
+      this.lastNarrated.set(agent.session, this.store.get(agent.session.id).active)
+      if (!this.store.get(agent.session.id).active) return
       if (this.scopes.get(agent) !== undefined) return
-      this.scopes.set(agent, applyDirectorScope(ctx, agent, this.config, this.sectionSource))
+      const scope = applyDirectorScope(ctx, agent, this.config, this.store, this.sectionSource)
+      scope.registry.seed(this.store.get(agent.session.id).workers)
+      this.scopes.set(agent, scope)
     })
 
     // Director disposal fallback: drain the worker forest (the director is
@@ -258,42 +281,41 @@ export class VibeModeController extends Service {
   }
 
   /**
-   * Read the logged vibe state and any selected state awaiting the next
+   * Read the plugin-owned vibe state and any selected state awaiting the next
    * accepted in-turn pre-step.
    */
   get(agent: Agent): { active: boolean; pending?: boolean } {
-    const active = foldVibeMode(agent.session.events)
+    const active = this.store.get(agent.session.id).active
     const pending = this.pendingIntents.get(agent.session)
     return pending === undefined ? { active } : { active, pending: pending.active }
   }
 
   /**
    * Select whether vibe mode should be active. Between turns the change
-   * appends immediately; during an open turn it stays pending until the next
+   * lands immediately; during an open turn it stays pending until the next
    * accepted in-turn pre-step. Entering while plan or compact mode is active
    * throws {@link VibeModeConflictError}.
    *
-   * @returns what happened: `committed` (logged now), `queued` (awaiting the
+   * @returns what happened: `committed` (applied now), `queued` (awaiting the
    * next accepted in-turn pre-step), `cancelled` (an opposite pending
-   * selection was cleared; the logged state already matches), or `noop`.
+   * selection was cleared; the state already matches), or `noop`.
    */
   set(agent: Agent, active: boolean): 'committed' | 'queued' | 'cancelled' | 'noop' {
     const session = agent.session
     if (active) this.assertEnterable(agent)
     const pending = this.pendingIntents.get(session)
-    const target = pending?.active ?? foldVibeMode(session.events)
+    const target = pending?.active ?? this.store.get(session.id).active
     if (active === target) return 'noop'
     if (hasOpenTurn(session.events)) {
       this.pendingIntents.set(session, { active, narrate: true })
-      return foldVibeMode(session.events) === active ? 'cancelled' : 'queued'
+      return this.store.get(session.id).active === active ? 'cancelled' : 'queued'
     }
-    // No open turn: commit now. Delete only after append succeeds so a
-    // failed durable write leaves the selection retryable, not dropped.
-    if (active === foldVibeMode(session.events)) {
+    if (active === this.store.get(session.id).active) {
       this.pendingIntents.delete(session)
       return 'cancelled'
     }
-    session.append('vibe/mode', { active })
+    // No open turn: commit now.
+    this.store.setActive(session.id, active)
     this.pendingIntents.delete(session)
     const narration = this.narration(session, active)
     if (narration !== undefined) agent.inject(narration)
@@ -319,23 +341,24 @@ export class VibeModeController extends Service {
     }
   }
 
-  /** Append one pending selection before the next request assembly. */
+  /** Apply one pending selection before the next request assembly. */
   private onBoundary(session: Session): void {
     const pending = this.pendingIntents.get(session)
     if (pending === undefined) return
     const target = pending.active
-    if (target === foldVibeMode(session.events)) {
+    if (target === this.store.get(session.id).active) {
       this.pendingIntents.delete(session)
       return
     }
-    session.append('vibe/mode', { active: target })
+    this.store.setActive(session.id, target)
     this.pendingIntents.delete(session)
   }
 
-  /** Build a user-switch notice when the last logged header described the other mode. */
+  /** Build a user-switch notice when the mode actually changed. */
   private narration(session: Session, target: boolean): UserMessage | undefined {
-    const told = vibeModeAtLastHeader(session.events)
-    if (told === undefined || told === target) return
+    const told = this.lastNarrated.get(session)
+    this.lastNarrated.set(session, target)
+    if (told === target) return
     const text = target
       ? 'The user switched this session to DIRECTOR (vibe) mode: your toolset is narrowed and you must delegate all work to vibe_* workers instead of doing it yourself.'
       : 'The user switched this session back to the default mode.'

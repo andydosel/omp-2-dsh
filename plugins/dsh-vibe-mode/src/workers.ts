@@ -22,7 +22,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Session, SessionId, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionId, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { finalAssistantOutput } from '@deepseek-ai/dsh-subagent'
@@ -158,6 +158,7 @@ export class WorkerRegistry {
     private readonly ctx: Context,
     private readonly director: Agent,
     private readonly wakeBudget: number,
+    private readonly rosterSink: (workers: VibeWorkerView[]) => void,
   ) {
     // The session/event firehose on the ROOT ctx sees every session's events,
     // including the children's. Scope-filtered dispatch would miss them.
@@ -456,27 +457,34 @@ export class WorkerRegistry {
   }
 
   /**
-   * Append the current roster as a `vibe/workers` whole-value event — on the
-   * DIRECTOR session (the projection's home) and on every live worker session
-   * (mirror), so the client dock can show the roster (and its
-   * "返回主会话" affordance) while a worker session is current.
+   * Publish the current roster to the plugin-owned store (the `vibeWorkers`
+   * projection reads it). Replaces the old `vibe/workers` session-event
+   * mirror: the roster is plugin state, never a session event.
    */
   private emitRoster(): void {
     if (this.disposed) return
-    const payload = { workers: this.workersView() }
-    try {
-      this.director.session.append('vibe/workers', payload)
-    } catch (error) {
-      this.ctx.logger.warn('dsh-vibe-mode: failed to append vibe/workers to the director session: %o', error)
-    }
-    for (const record of this.workers.values()) {
-      const session = childSession(this.ctx, record.childId)
-      if (session === undefined) continue
-      try {
-        session.append('vibe/workers', payload)
-      } catch (error) {
-        this.ctx.logger.warn('dsh-vibe-mode: failed to append vibe/workers to worker session %s: %o', record.childId, error)
-      }
+    this.rosterSink(this.workersView())
+  }
+
+  /**
+   * Seed the in-memory roster from a persisted snapshot (a `/vibe restore` or
+   * resume after restart). Resumed workers are normalized to `parked`: a
+   * restart interrupted every open turn, and the live state re-derives from
+   * `session/event` as work flows.
+   */
+  seed(workers: VibeWorkerView[]): void {
+    for (const worker of workers) {
+      const childId = worker.id as SessionId
+      if (this.workers.has(childId)) continue
+      this.workers.set(childId, {
+        childId,
+        tier: worker.tier,
+        label: worker.name ?? worker.id,
+        lastTurn: worker.turn,
+        dispatched: worker.turn,
+        state: 'parked',
+        lastActivity: worker.lastActivity ?? new Date().toISOString(),
+      })
     }
   }
 
@@ -516,10 +524,4 @@ export function childSessionEvents(ctx: Context, childId: SessionId): readonly S
   return session?.events
 }
 
-/** Read the child's live Session for roster mirror appends. */
-function childSession(ctx: Context, childId: SessionId): Session | undefined {
-  const agent = ctx.get('agents')?.get(childId)
-  if (agent !== undefined) return agent.session
-  const sessions = ctx.get('sessions')
-  return sessions?.get(childId)
-}
+
