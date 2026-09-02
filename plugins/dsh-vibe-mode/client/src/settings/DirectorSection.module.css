@@ -1,0 +1,52 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 640px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsh-text, #ddd);
+}
+
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.3));
+  background: var(--dsh-surface, rgba(255, 255, 255, 0.05));
+  color: var(--dsh-text, #ddd);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.save {
+  align-self: flex-start;
+  padding: 4px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.3));
+  background: rgba(74, 158, 255, 0.18);
+  color: #7ab8ff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.notice,
+.failed {
+  font-size: 12px;
+  color: var(--dsh-text-secondary, #888);
+}
+
+.failed {
+  color: #e6a23c;
+}
