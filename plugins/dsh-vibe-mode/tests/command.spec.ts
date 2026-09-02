@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { CommandId } from '@deepseek-ai/dsh-commands/brand'
-import { foldVibeMode } from '../src/index.ts'
 import { agentWithSession, setup, MockSubagents, visibleToolNames, testExec } from './harness.ts'
 
 const READ_ONLY = ['read', 'glob', 'grep', 'read_image', 'todo_write']
@@ -33,13 +32,13 @@ async function spawnWorker(ctx: Context, agent: Agent, cli: 'fast' | 'good' = 'f
 }
 
 describe('/vibe command lifecycle', () => {
-  it('enters mode: narrows the director, registers tools, and logs vibe/mode', async () => {
+  it('enters mode: narrows the director, registers tools, and records plugin state', async () => {
     const mock = new MockSubagents()
     const ctx = await setup(mock)
     const director = await agentWithSession(ctx, 'cmd-on')
     const result = await runVibe(ctx, director, '')
     expect(result.kind).toBe('success')
-    expect(foldVibeMode(director.session.events)).toBe(true)
+    expect(ctx.vibeMode.get(director).active).toBe(true)
     const names = visibleToolNames(ctx, director)
     expect(names.sort()).toEqual([...READ_ONLY, ...VIBE_TOOLS].sort())
   })
@@ -52,7 +51,7 @@ describe('/vibe command lifecycle', () => {
     const result = await runVibe(ctx, director, '')
     expect(result.kind).toBe('error')
     expect(result.text).toMatch(/plan mode/)
-    expect(foldVibeMode(director.session.events)).toBe(false)
+    expect(ctx.vibeMode.get(director).active).toBe(false)
   })
 
   it('/vibe off parks every live worker and restores the full catalog', async () => {
@@ -67,7 +66,7 @@ describe('/vibe command lifecycle', () => {
     expect(result.kind).toBe('success')
     expect(result.text).toMatch(/parked/)
     expect(mock.interruptCalls.sort()).toEqual([a, b].sort())
-    expect(foldVibeMode(director.session.events)).toBe(false)
+    expect(ctx.vibeMode.get(director).active).toBe(false)
     expect(visibleToolNames(ctx, director).sort()).toEqual([...ALL_TOOLS].sort())
   })
 
@@ -82,7 +81,7 @@ describe('/vibe command lifecycle', () => {
     expect(result.text).toMatch(/terminated/)
     expect(mock.interruptCalls).toEqual([])
     expect(mock.drainCalls).toEqual([[director.id]])
-    expect(foldVibeMode(director.session.events)).toBe(false)
+    expect(ctx.vibeMode.get(director).active).toBe(false)
   })
 
   it('agent disposal drains the worker forest as the fallback', async () => {
@@ -103,9 +102,37 @@ describe('/vibe command lifecycle', () => {
     await runVibe(ctx, director, '')
     await runVibe(ctx, director, 'off')
     await runVibe(ctx, director, 'on')
-    expect(foldVibeMode(director.session.events)).toBe(true)
+    expect(ctx.vibeMode.get(director).active).toBe(true)
     const names = visibleToolNames(ctx, director)
     expect(names.sort()).toEqual([...READ_ONLY, ...VIBE_TOOLS].sort())
+  })
+
+  it('/vibe restore re-applies the saved runtime scope (idempotent)', async () => {
+    const mock = new MockSubagents()
+    const ctx = await setup(mock)
+    const director = await agentWithSession(ctx, 'cmd-restore')
+    // Simulate a persisted snapshot: the store says active, but the runtime
+    // scope is not applied (a restart lost the scoped registrations).
+    ctx.vibeMode.store.setActive(director.session.id, true)
+    expect(visibleToolNames(ctx, director).sort()).toEqual([...ALL_TOOLS].sort())
+    const result = await runVibe(ctx, director, 'restore')
+    expect(result.kind).toBe('success')
+    expect(result.text).toMatch(/restored/)
+    const names = visibleToolNames(ctx, director)
+    expect(names.sort()).toEqual([...READ_ONLY, ...VIBE_TOOLS].sort())
+    // Idempotent: a second restore does not double-apply.
+    await runVibe(ctx, director, 'restore')
+    expect(visibleToolNames(ctx, director).sort()).toEqual([...READ_ONLY, ...VIBE_TOOLS].sort())
+  })
+
+  it('/vibe restore with no saved state reports nothing to restore', async () => {
+    const mock = new MockSubagents()
+    const ctx = await setup(mock)
+    const director = await agentWithSession(ctx, 'cmd-restore-none')
+    const result = await runVibe(ctx, director, 'restore')
+    expect(result.kind).toBe('success')
+    expect(result.text).toMatch(/No saved DIRECTOR state/)
+    expect(visibleToolNames(ctx, director).sort()).toEqual([...ALL_TOOLS].sort())
   })
 
   it('a spawned worker survives /vibe off parked and is listed on re-entry', async () => {

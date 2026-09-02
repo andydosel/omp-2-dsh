@@ -1,29 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { DEFAULT_DIRECTOR_SECTION, VibeModeConflictError, foldVibeMode, resolveConfig } from '../src/index.ts'
+import { DEFAULT_DIRECTOR_SECTION, VibeModeConflictError, resolveConfig } from '../src/index.ts'
 import {
-  VIBE_CONFIG, MockSubagents, agentWithSession, boundary, closeTurn, header, noticeTexts, openTurn, setup,
+  VIBE_CONFIG, MockSubagents, agentWithSession, boundary, closeTurn, noticeTexts, openTurn, setup,
 } from './harness.ts'
 
 describe('vibe mode state machine', () => {
-  it('folds vibe/mode last-wins from a session log', () => {
-    const session = Session.create(SessionId('fold'))
-    session.append('vibe/mode', { active: true })
-    session.append('vibe/mode', { active: false })
-    session.append('vibe/mode', { active: true })
-    expect(foldVibeMode(session.events)).toBe(true)
-    expect(foldVibeMode(session.events, 2)).toBe(false)
-  })
-
   it('set between turns commits immediately and is idempotent', async () => {
     const ctx = await setup(new MockSubagents())
     const agent = await agentWithSession(ctx, 'mode-idle')
     expect(ctx.vibeMode.set(agent, true)).toBe('committed')
-    expect(foldVibeMode(agent.session.events)).toBe(true)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(true)
     expect(ctx.vibeMode.get(agent)).toEqual({ active: true })
     expect(ctx.vibeMode.set(agent, true)).toBe('noop')
     expect(ctx.vibeMode.set(agent, false)).toBe('committed')
-    expect(foldVibeMode(agent.session.events)).toBe(false)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(false)
   })
 
   it('set during an open turn queues until the accepted pre-step boundary', async () => {
@@ -34,7 +24,7 @@ describe('vibe mode state machine', () => {
     expect(ctx.vibeMode.get(agent)).toEqual({ active: false, pending: true })
     // The boundary commits the selection and narration lands.
     await boundary(ctx, agent, 'step-start')
-    expect(foldVibeMode(agent.session.events)).toBe(true)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(true)
     expect(ctx.vibeMode.get(agent)).toEqual({ active: true })
   })
 
@@ -44,12 +34,12 @@ describe('vibe mode state machine', () => {
     openTurn(agent.session)
     expect(ctx.vibeMode.set(agent, true)).toBe('queued')
     closeTurn(agent.session)
-    // Back to the logged state: the pending intent clears, nothing lands.
+    // Back to the store state: the pending intent clears, nothing lands.
     expect(ctx.vibeMode.set(agent, false)).toBe('cancelled')
-    expect(agent.session.events.some(event => event.type === 'vibe/mode')).toBe(false)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(false)
     expect(ctx.vibeMode.get(agent)).toEqual({ active: false })
     await boundary(ctx, agent, 'step-start')
-    expect(agent.session.events.some(event => event.type === 'vibe/mode')).toBe(false)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(false)
   })
 
   it('a rejected step keeps the selection pending for a later accepted boundary', async () => {
@@ -66,21 +56,17 @@ describe('vibe mode state machine', () => {
       { messages: [createUserMessage({ content: [{ type: 'text', text: 'x' }], source: { kind: 'user' } })], turn: 1, step: 1, signal: new AbortController().signal },
       () => Promise.resolve({ kind: 'reject' as const }),
     )
-    expect(foldVibeMode(agent.session.events)).toBe(false)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(false)
     // The next accepted boundary still commits.
     await boundary(ctx, agent, 'step-start')
-    expect(foldVibeMode(agent.session.events)).toBe(true)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(true)
   })
 
-  it('narrates a user flip only when the last logged header described the other mode', async () => {
+  it('narrates a user flip on every mode change', async () => {
     const ctx = await setup(new MockSubagents())
     const agent = await agentWithSession(ctx, 'mode-narration')
-    header(agent.session)
     ctx.vibeMode.set(agent, true)
     expect(noticeTexts(agent.session)).toEqual(['The user switched this session to DIRECTOR (vibe) mode: your toolset is narrowed and you must delegate all work to vibe_* workers instead of doing it yourself.'])
-    // A fresh header after the flip describes the active mode; switching back
-    // narrates the reverse direction.
-    header(agent.session)
     ctx.vibeMode.set(agent, false)
     expect(noticeTexts(agent.session)).toContain('The user switched this session back to the default mode.')
   })
@@ -92,7 +78,7 @@ describe('vibe mode state machine', () => {
     ctx.provide('planMode', { get: () => ({ active: true }) } as never)
     expect(() => ctx.vibeMode.set(agent, true)).toThrow(VibeModeConflictError)
     expect(() => ctx.vibeMode.set(agent, true)).toThrow(/plan mode/)
-    expect(foldVibeMode(agent.session.events)).toBe(false)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(false)
   })
 
   it('refuses to enter while compact mode is active (mutex)', async () => {
@@ -133,6 +119,6 @@ describe('closeTurn helper shapes', () => {
     ctx.vibeMode.set(agent, true)
     closeTurn(agent.session)
     expect(ctx.vibeMode.set(agent, false)).toBe('cancelled')
-    expect(agent.session.events.some(event => event.type === 'vibe/mode')).toBe(false)
+    expect(ctx.vibeMode.store.get(agent.session.id).active).toBe(false)
   })
 })

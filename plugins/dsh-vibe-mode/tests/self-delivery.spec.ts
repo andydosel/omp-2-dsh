@@ -40,7 +40,7 @@ describe('completion self-delivery', () => {
   it('steers the director when a worker turn ends with no wait consuming it', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'self-deliver')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     const child = Session.create(SessionId('w-self'))
     ctx.sessions.enter(child)
     scope.registry.spawn(SessionId('w-self'), 'fast', 'alpha', undefined)
@@ -58,7 +58,7 @@ describe('completion self-delivery', () => {
   it('does NOT steer when a vibe_wait returned the result inline (ack)', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'self-acked')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     const child = Session.create(SessionId('w-acked'))
     ctx.sessions.enter(child)
     scope.registry.spawn(SessionId('w-acked'), 'good', 'beta', undefined)
@@ -76,7 +76,7 @@ describe('completion self-delivery', () => {
   it('does NOT steer on a replayed turn/end after a from-log inline resolution (deliveredTurns ack)', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'self-replay')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     // Un-entered child: the turn completes WITHOUT publishing (no steer yet).
     const child = Session.create(SessionId('w-replay'))
     scope.registry.spawn(SessionId('w-replay'), 'fast', 'gamma', undefined)
@@ -98,7 +98,7 @@ describe('completion self-delivery', () => {
   it('caps the completion preview at 2000 chars and points to read agent://', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'self-cap')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     const child = Session.create(SessionId('w-cap'))
     ctx.sessions.enter(child)
     scope.registry.spawn(SessionId('w-cap'), 'good', 'delta', undefined)
@@ -115,7 +115,7 @@ describe('completion self-delivery', () => {
     const mock = new MockSubagents()
     const ctx = await setup(mock)
     const director = await agentWithSession(ctx, 'self-budget')
-    const scope = applyDirectorScope(ctx, director, { ...ctx.vibeMode.config, maxConsecutiveWakes: 1 })
+    const scope = applyDirectorScope(ctx, director, { ...ctx.vibeMode.config, maxConsecutiveWakes: 1 }, ctx.vibeMode.store)
     const childA = Session.create(SessionId('w-budget-a'))
     const childB = Session.create(SessionId('w-budget-b'))
     ctx.sessions.enter(childA)
@@ -137,7 +137,7 @@ describe('completion self-delivery', () => {
   it('a user message interrupts an in-flight vibe_wait early and the completion still steers once', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'interrupt-wait')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     const spawnDef = ctx.tools.get('vibe_spawn', director)!
     const spawned = await spawnDef.execute({ cli: 'fast', prompt: 'work' }, testExec(director)) as { subagentId: string }
     const child = Session.create(SessionId(spawned.subagentId))
@@ -161,7 +161,7 @@ describe('completion self-delivery', () => {
   it('a real tool abort still rejects instead of resolving interrupted', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'interrupt-abort')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     const spawnDef = ctx.tools.get('vibe_spawn', director)!
     const spawned = await spawnDef.execute({ cli: 'fast', prompt: 'work' }, testExec(director)) as { subagentId: string }
     const waitDef = ctx.tools.get('vibe_wait', director)!

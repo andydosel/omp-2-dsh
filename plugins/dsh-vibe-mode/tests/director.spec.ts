@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { applyDirectorScope, foldVibeMode } from '../src/index.ts'
+import { applyDirectorScope } from '../src/index.ts'
 import { agentWithSession, assembleFor, setup, MockSubagents, VIBE_CONFIG, visibleToolNames } from './harness.ts'
 
 const ALL_TOOLS = ['read', 'glob', 'grep', 'read_image', 'todo_write', 'write', 'bash']
@@ -13,7 +13,7 @@ describe('director narrowing', () => {
     const other = await agentWithSession(ctx, 'narrow-other')
     // Before entry the full catalog is visible to everyone.
     expect(visibleToolNames(ctx, director).sort()).toEqual([...ALL_TOOLS].sort())
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     const names = visibleToolNames(ctx, director)
     expect(names.sort()).toEqual([...READ_ONLY, ...VIBE_TOOLS].sort())
     // The other agent is untouched.
@@ -26,7 +26,7 @@ describe('director narrowing', () => {
   it('applies native presentation so code-mode run_code cannot bypass the mask', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'narrow-native')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     // No run_code transport appears in the director's native catalog.
     expect(visibleToolNames(ctx, director)).not.toContain('run_code')
     scope.dispose()
@@ -36,7 +36,7 @@ describe('director narrowing', () => {
     const ctx = await setup(new MockSubagents())
     // Active fold: the section renders the directive.
     const active = await agentWithSession(ctx, 'narrow-section-active', { active: true })
-    const activeScope = applyDirectorScope(ctx, active, ctx.vibeMode.config)
+    const activeScope = applyDirectorScope(ctx, active, ctx.vibeMode.config, ctx.vibeMode.store)
     const activeAssembly = await assembleFor(ctx, active)
     const activeSection = activeAssembly.sections.find(section => section.name === 'director:instructions')
     expect(activeSection?.text).toContain('DIRECTOR')
@@ -46,7 +46,7 @@ describe('director narrowing', () => {
     expect(activeIndex).toBeGreaterThan(personaIndex)
     // Inactive fold: the same registration renders empty (no directive leaks).
     const idle = await agentWithSession(ctx, 'narrow-section-idle')
-    const idleScope = applyDirectorScope(ctx, idle, ctx.vibeMode.config)
+    const idleScope = applyDirectorScope(ctx, idle, ctx.vibeMode.config, ctx.vibeMode.store)
     const idleAssembly = await assembleFor(ctx, idle)
     const idleSection = idleAssembly.sections.find(section => section.name === 'director:instructions')
     expect(idleSection?.text).toBe('')
@@ -60,7 +60,7 @@ describe('director narrowing', () => {
   it('mounts the director:tool-guidance section at order 150, fold-driven', async () => {
     const ctx = await setup(new MockSubagents())
     const active = await agentWithSession(ctx, 'narrow-guidance-active', { active: true })
-    const activeScope = applyDirectorScope(ctx, active, ctx.vibeMode.config)
+    const activeScope = applyDirectorScope(ctx, active, ctx.vibeMode.config, ctx.vibeMode.store)
     const activeAssembly = await assembleFor(ctx, active)
     const guidance = activeAssembly.sections.find(section => section.name === 'director:tool-guidance')
     expect(guidance?.text).toContain('vibe_spawn')
@@ -71,7 +71,7 @@ describe('director narrowing', () => {
     expect(guidanceIndex).toBeGreaterThan(directorIndex)
     // Inactive fold renders empty; dispose removes the registration.
     const idle = await agentWithSession(ctx, 'narrow-guidance-idle')
-    const idleScope = applyDirectorScope(ctx, idle, ctx.vibeMode.config)
+    const idleScope = applyDirectorScope(ctx, idle, ctx.vibeMode.config, ctx.vibeMode.store)
     const idleAssembly = await assembleFor(ctx, idle)
     expect(idleAssembly.sections.find(section => section.name === 'director:tool-guidance')?.text).toBe('')
     idleScope.dispose()
@@ -83,7 +83,7 @@ describe('director narrowing', () => {
   it('a fold-active session re-applies narrowing on session-start (resume restore)', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'narrow-resume', { active: true })
-    expect(foldVibeMode(director.session.events)).toBe(true)
+    expect(ctx.vibeMode.store.get(director.session.id).active).toBe(true)
     // Emit session-start like a resumed director; the plugin re-applies the scope.
     ctx.emit('agent/session-start', { agent: director, source: 'resume' })
     const names = visibleToolNames(ctx, director)
@@ -95,7 +95,7 @@ describe('director narrowing', () => {
     const director = await agentWithSession(ctx, 'narrow-badname')
     const warn = vi.spyOn(ctx.logger, 'warn')
     const bad = { ...ctx.vibeMode.config, readOnlyTools: ['read', 'no_such_tool'] }
-    const scope = applyDirectorScope(ctx, director, bad)
+    const scope = applyDirectorScope(ctx, director, bad, ctx.vibeMode.store)
     // The unknown name is dropped; the surviving allow-list still restricts.
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('readOnlyTools names not present'),
@@ -109,13 +109,13 @@ describe('director narrowing', () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'narrow-empty')
     const empty = { ...ctx.vibeMode.config, readOnlyTools: ['no_such_tool', 'also_missing'] }
-    expect(() => applyDirectorScope(ctx, director, empty)).toThrow(/none of the configured readOnlyTools/)
+    expect(() => applyDirectorScope(ctx, director, empty, ctx.vibeMode.store)).toThrow(/none of the configured readOnlyTools/)
   })
 
   it('dispose is idempotent and rolls back every registration', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'narrow-idem')
-    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config)
+    const scope = applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)
     scope.dispose()
     scope.dispose()
     expect(visibleToolNames(ctx, director).sort()).toEqual([...ALL_TOOLS].sort())
@@ -127,7 +127,7 @@ describe('director narrowing', () => {
     // Register a conflicting presentation on the director scope first: the
     // presentAs('native') call then throws, and the earlier restrict must roll back.
     const conflict = director.ctx.tools.presentAs('code')
-    expect(() => applyDirectorScope(ctx, director, ctx.vibeMode.config)).toThrow()
+    expect(() => applyDirectorScope(ctx, director, ctx.vibeMode.config, ctx.vibeMode.store)).toThrow()
     // The restrict was rolled back: the full catalog (plus run_code from the
     // still-declared code presentation) is visible again.
     expect(visibleToolNames(ctx, director).sort()).toEqual([...ALL_TOOLS, 'run_code'].sort())

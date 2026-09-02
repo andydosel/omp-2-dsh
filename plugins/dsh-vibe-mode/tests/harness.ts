@@ -18,6 +18,9 @@ import VibeModeController from '../src/mode.ts'
 import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { VibeModeConfig } from '../src/index.ts'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 export const VIBE_CONFIG: VibeModeConfig = {
   section: 'You are the DIRECTOR. Delegate work to workers with vibe_spawn; collect results with vibe_wait.',
@@ -131,21 +134,29 @@ async function setupCtx(
   doc: Record<string, unknown> = {},
 ): Promise<Context> {
   const ctx = new Context()
-  await ctx.plugin(SystemPrompt)
-  await ctx.plugin(SessionStore)
-  await ctx.plugin(ToolRuntime)
-  await ctx.plugin(CommandRuntime)
-  await ctx.plugin(AgentRegistry)
-  if (withSettings) await ctx.plugin(MemorySettings, doc)
-  ctx.provide('subagents', mock as never)
-  await ctx.plugin(VibeModeController, config)
-  for (const name of ['read', 'glob', 'grep', 'read_image', 'todo_write', 'write', 'bash']) {
-    ctx.tools.register(defineContentToolFixture({
-      name,
-      description: `test tool ${name}`,
-      parameters: {},
-      execute: () => Promise.resolve([{ type: 'text', text: `ran ${name}` }]),
-    }))
+  // Isolate the plugin-owned JSON snapshot per test: the store resolves its
+  // path from DSH_HOME at construction, so point it at a fresh temp dir.
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-vibe-test-'))
+  try {
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(CommandRuntime)
+    await ctx.plugin(AgentRegistry)
+    if (withSettings) await ctx.plugin(MemorySettings, doc)
+    ctx.provide('subagents', mock as never)
+    await ctx.plugin(VibeModeController, config)
+    for (const name of ['read', 'glob', 'grep', 'read_image', 'todo_write', 'write', 'bash']) {
+      ctx.tools.register(defineContentToolFixture({
+        name,
+        description: `test tool ${name}`,
+        parameters: {},
+        execute: () => Promise.resolve([{ type: 'text', text: `ran ${name}` }]),
+      }))
+    }
+  } finally {
+    process.env.DSH_HOME = prevHome
   }
   return ctx
 }
@@ -180,7 +191,7 @@ export async function agentWithSession(
     inject: ['tools', 'systemPrompt'],
   }))
   ;(agent as { ctx?: Context }).ctx = scoped
-  if (active !== undefined) session.append('vibe/mode', { active })
+  if (active !== undefined) ctx.vibeMode.store.setActive(id, active)
   const agents = ctx.get('agents')
   if (agents === undefined) {
     ctx.emit('agent/created', { agent })

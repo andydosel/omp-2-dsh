@@ -17,21 +17,13 @@ describe('worker registry', () => {
   it('exposes the running roster state across turns, seeding it on spawn before the firehose turn/start', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'roster-director')
-    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, (workers) => {
+      ctx.vibeMode.store.setWorkers(director.session.id, workers)
+    })
     const child = Session.create(SessionId('w-roster'))
     const lastRosterState = (): string | undefined => {
-      for (let i = director.session.events.length - 1; i >= 0; i--) {
-        const event = director.session.events[i]
-        if (event === undefined) continue
-        if (event.type !== 'vibe/workers') continue
-        if (typeof event.data !== 'object' || event.data === null || !('workers' in event.data)) continue
-        const workers = event.data.workers
-        if (!Array.isArray(workers)) continue
-        const first = workers[0]
-        if (first === null || typeof first !== 'object' || !('state' in first)) continue
-        return typeof first.state === 'string' ? first.state : undefined
-      }
-      return undefined
+      const workers = ctx.vibeMode.store.get(director.session.id).workers
+      return workers[0]?.state
     }
     // Real race: startContinuable dispatches the child's first turn/start
     // BEFORE registry.spawn registers the record, so the firehose listener
@@ -42,7 +34,7 @@ describe('worker registry', () => {
     expect(registry.get(SessionId('w-roster'))?.state).toBe('running')
     expect(lastRosterState()).toBe('running')
 
-    // turn/end -> idle (and emits vibe/workers).
+    // turn/end -> idle (and publishes the roster to the store).
     const end = child.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     ctx.emit('session/event', child, end)
     expect(registry.get(SessionId('w-roster'))?.state).toBe('idle')
@@ -59,7 +51,7 @@ describe('worker registry', () => {
   it('resolves a wait on the exact turn/end event with the child final output', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'wait-director')
-    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, () => {})
     const child = Session.create(SessionId('w-turn'))
     registry.spawn(SessionId('w-turn'), 'good', 'beta', undefined)
     const promise = waitForTurn(ctx, registry, 'w-turn', 1, () => child.events)
@@ -76,7 +68,7 @@ describe('worker registry', () => {
   it('a wait registered after the turn already ended resolves immediately from the log', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'wait-late')
-    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, () => {})
     const child = Session.create(SessionId('w-late'))
     childTurn(child, 1, 'done already')
     registry.spawn(SessionId('w-late'), 'fast', 'gamma', child.events)
@@ -89,7 +81,7 @@ describe('worker registry', () => {
   it('times out when the turn never ends, leaving the worker runnable', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'wait-timeout')
-    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, () => {})
     registry.spawn(SessionId('w-tout'), 'fast', 'delta', undefined)
     const result = await registry.waitForTurn(
       SessionId('w-tout'),
@@ -126,7 +118,7 @@ describe('worker registry', () => {
     const withOutput = await (async () => {
       const ctx = await setup(new MockSubagents())
       const director = await agentWithSession(ctx, 'lossless-ok')
-      const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+      const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, () => {})
       const child = Session.create(SessionId('w-lossless-ok'))
       registry.spawn(SessionId('w-lossless-ok'), 'good', 'iota', undefined)
       const promise = waitForTurn(ctx, registry, 'w-lossless-ok', 1, () => child.events)
@@ -143,7 +135,7 @@ describe('worker registry', () => {
     const withoutOutput = await (async () => {
       const ctx = await setup(new MockSubagents())
       const director = await agentWithSession(ctx, 'lossless-timeout')
-      const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+      const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, () => {})
       registry.spawn(SessionId('w-lossless-tout'), 'fast', 'kappa', undefined)
       const result = await registry.waitForTurn(
         SessionId('w-lossless-tout'),
@@ -161,7 +153,7 @@ describe('worker registry', () => {
   it('rejects aborted waits with the exec signal reason', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'wait-abort')
-    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, () => {})
     registry.spawn(SessionId('w-abort'), 'good', 'eps', undefined)
     const controller = new AbortController()
     const promise = registry.waitForTurn(
@@ -178,7 +170,7 @@ describe('worker registry', () => {
   it('rejects when the worker agent is disposed while waiting', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'wait-disposed')
-    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3)
+    const registry = new WorkerRegistry(ctx, director, VIBE_CONFIG.maxConsecutiveWakes ?? 3, () => {})
     registry.spawn(SessionId('w-gone'), 'fast', 'zeta', undefined)
     const promise = registry.waitForTurn(
       SessionId('w-gone'),
@@ -196,7 +188,7 @@ describe('worker registry', () => {
   it('spends and resets the consecutive-settle wake budget like tool-jobs', async () => {
     const ctx = await setup(new MockSubagents())
     const director = await agentWithSession(ctx, 'wake-director')
-    const registry = new WorkerRegistry(ctx, director, 2)
+    const registry = new WorkerRegistry(ctx, director, 2, () => {})
     expect(registry.wakeBudgetExhausted()).toBe(false)
     const mock = ctx.get('subagents') as unknown as MockSubagents
     mock.claimSettled(ctx, director)

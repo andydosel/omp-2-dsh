@@ -12,6 +12,8 @@
  * @module @dsh-plugin/dsh-vibe-mode/state-store
  */
 
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { VibeWorkerView } from './types.ts'
 
 /** The whole per-session vibe state (active flag + worker roster). */
@@ -72,7 +74,6 @@ export class VibeModeStore {
   async load(): Promise<void> {
     if (this.loaded) return
     this.loaded = true
-    const { readFile } = await import('node:fs/promises')
     let raw: string
     try {
       raw = await readFile(this.path, 'utf8')
@@ -105,25 +106,19 @@ export class VibeModeStore {
     this.sessions.set(sessionId, state)
     this.latest = state
     const serialized = JSON.stringify(Object.fromEntries(this.sessions), null, 2)
-    if (Buffer.byteLength(serialized, 'utf8') > STORE_MAX_BYTES) {
-      this.writeTail.catch(() => {})
-      return
-    }
+    if (Buffer.byteLength(serialized, 'utf8') > STORE_MAX_BYTES) return
     const write = this.persist(serialized)
     this.writeTail = this.writeTail.then(() => write).catch(() => {})
   }
 
   private async persist(serialized: string): Promise<void> {
-    const { writeFile, rename } = await import('node:fs/promises')
-    const { dirname } = await import('node:path')
-    const { mkdir } = await import('node:fs/promises')
     try {
       await mkdir(dirname(this.path), { recursive: true })
+      const tmp = `${this.path}.tmp`
+      await writeFile(tmp, serialized, { mode: 0o600 })
+      await rename(tmp, this.path)
     } catch {
-      // the directory already exists or is unwritable; the write will fail loud
+      // Best-effort snapshot: a failed write must never reject the caller.
     }
-    const tmp = `${this.path}.tmp`
-    await writeFile(tmp, serialized, { mode: 0o600 })
-    await rename(tmp, this.path)
   }
 }
