@@ -1,6 +1,0 @@
-# Dev-workspace artifacts for the plugin suite (not release content).
-# The actual plugin projects are their own nested repos; these files are
-# workspace-level artifacts produced by install/build, not tracked release tooling.
-plugin/node_modules/
-plugin/pnpm-lock.yaml
-plugin/pnpm-workspace.yaml
