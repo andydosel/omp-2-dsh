@@ -69,10 +69,12 @@ function Resolve-PluginEntry {
     return Join-Path $PackageDir $rel
 }
 
-$pluginRoot  = $PSScriptRoot                       # .../dsh-plugin/plugin
-$profileDir  = Join-Path $pluginRoot 'profile-main'
+$repoRoot    = Split-Path -Parent $PSScriptRoot     # .../omp-2-dsh (scripts/ lives at the repo root)
+$pluginRoot  = Join-Path $repoRoot 'plugins'
+$scriptDir   = $PSScriptRoot                        # .../omp-2-dsh/scripts
+$profileDir  = Join-Path $repoRoot 'profiles\main'
 $patchFile   = Join-Path $profileDir 'cordis.patch.yml'
-$versionFile = Join-Path $pluginRoot 'VERSION'
+$versionFile = Join-Path $repoRoot 'VERSION'
 
 # ── single source of truth for the suite version ────────────────────────────
 if (-not $Version) {
@@ -82,13 +84,16 @@ if (-not $Version) {
     $Version = (Get-Content $versionFile -Raw).Trim()
     if (-not $Version) { throw "VERSION file at '$versionFile' is empty." }
 }
-if (-not $OutputDir) { $OutputDir = Join-Path $pluginRoot 'release' }
+if (-not $OutputDir) { $OutputDir = Join-Path $repoRoot 'release' }
 
 if (-not (Test-Path $patchFile)) { throw "patch not found at '$patchFile'." }
-foreach ($f in @('setup.ps1', 'start.ps1', 'README.md')) {
-    if (-not (Test-Path (Join-Path $pluginRoot $f))) {
-        throw "missing consumer file '$f' beside release.ps1 (it ships inside the zip)."
+foreach ($f in @('setup.ps1', 'start.ps1')) {
+    if (-not (Test-Path (Join-Path $scriptDir $f))) {
+        throw "missing consumer script '$f' beside release.ps1 (it ships inside the zip)."
     }
+}
+if (-not (Test-Path (Join-Path $repoRoot 'README.md'))) {
+    throw "missing README.md at the repo root (it ships inside the zip)."
 }
 
 # Build order matters: compact-mode depends on tree-engine (workspace:*), the
@@ -156,9 +161,9 @@ New-Item -ItemType Directory -Force -Path $presetDst | Out-Null
 Copy-Item -Force $patchFile (Join-Path $pkgDir 'cordis.patch.yml')
 Copy-Item -Force (Join-Path $profileDir 'agent-presets\standard-rw\preset.yml')       $presetDst
 Copy-Item -Force (Join-Path $profileDir 'agent-presets\standard-rw\agent.cordis.yml') $presetDst
-Copy-Item -Force (Join-Path $pluginRoot 'setup.ps1')  $pkgDir
-Copy-Item -Force (Join-Path $pluginRoot 'start.ps1')  $pkgDir
-Copy-Item -Force (Join-Path $pluginRoot 'README.md')  $pkgDir
+Copy-Item -Force (Join-Path $scriptDir 'setup.ps1')  $pkgDir
+Copy-Item -Force (Join-Path $scriptDir 'start.ps1')  $pkgDir
+Copy-Item -Force (Join-Path $repoRoot 'README.md')   $pkgDir
 Set-Content -Path (Join-Path $pkgDir 'VERSION') -Value $Version -NoNewline
 
 # ── 4) zip it. Compress-Archive with a single source folder keeps the top-level
@@ -178,4 +183,4 @@ Write-Host ""
 Write-Host "Next steps (documented; not run here):"
 Write-Host "  git tag v$Version"
 Write-Host "  git push origin v$Version"
-Write-Host "  gh release create v$Version `"$zip`" --title `"dsh-suite $Version`" --notes `"See plugin/README.md for install/usage.`""
+Write-Host "  gh release create v$Version `"$zip`" --title `"dsh-suite $Version`" --notes `"See README.md for install/usage.`""

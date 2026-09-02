@@ -36,7 +36,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $profileDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pluginRoot  = Split-Path -Parent $profileDir        # .../dsh-plugin/plugin
+$repoRoot    = Split-Path -Parent (Split-Path -Parent $profileDir)   # .../omp-2-dsh
+$pluginRoot  = Join-Path $repoRoot 'plugins'        # plugins/ is a sibling of profiles/
 $patchFile   = Join-Path $profileDir 'cordis.patch.yml'
 
 # ConvertFrom-Json yields PSCustomObject, whose nested objects don't support

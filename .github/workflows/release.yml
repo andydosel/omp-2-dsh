@@ -1,14 +1,10 @@
-# release.yml — SKELETON: build the dsh plugin suite on a version tag and attach
-# the produced zip to the GitHub Release.
+# release.yml — build the dsh plugin suite on a version tag and attach the
+# produced zip to the GitHub Release.
 #
-# This is a starting point, NOT yet proven in CI. It mirrors what
-# plugin/release.ps1 does locally (build all 7 plugins, then zip), and it is the
-# automation the design doc proposes as the "build-on-tag -> upload asset" path.
-# Wire-up assumptions to verify before enabling:
-#   * The repo is the dsh-plugin repo root; this workflow lives under plugin/.
-#   * The runner can `pnpm install` each plugin (see the Install step notes).
-#   * A tag named v<version> is pushed; `gh release create` (or
-#     softprops/action-gh-release) attaches dsh-suite-<version>.zip to it.
+# Mirrors scripts/release.ps1 locally (build all 7 plugins in dependency order,
+# then zip) as the "build-on-tag -> upload asset" automation path. It assumes a
+# single root pnpm workspace (pnpm-workspace.yaml -> plugins/*) governing every
+# plugin, and that the release tooling lives under scripts/.
 name: release-suite
 
 on:
@@ -27,28 +23,18 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: 'pnpm'
 
-      # The root workspace manages tree-engine / compact-mode / vibe-mode only,
-      # while tool-read-write / advisor / channel-wechat / mode-ui each ship
-      # their own install. Install the root workspace AND each standalone plugin
-      # so `pnpm run build` works for every package. (Consider converging the
-      # repo on a single workspace to simplify this step.)
+      # One root workspace resolves all seven plugins (compact-mode pulls
+      # tree-engine via workspace:*); a single install covers the whole suite.
       - name: Install
         shell: pwsh
-        run: |
-          cd "${{ github.workspace }}/plugin"
-          pnpm install --frozen-lockfile
-          foreach ($p in @('dsh-tool-read-write','dsh-advisor','dsh-channel-wechat','dsh-mode-ui')) {
-            Push-Location $p
-            pnpm install --frozen-lockfile
-            Pop-Location
-          }
+        run: pnpm install --frozen-lockfile
 
       # Build all 7 + package the zip. Derive the bare version from the tag
       # (strip the leading 'v') so the zip and Release tag stay in lockstep.
@@ -57,11 +43,11 @@ jobs:
         run: |
           $ver = "${{ github.ref_name }}"
           if ($ver.StartsWith('v')) { $ver = $ver.Substring(1) }
-          & "${{ github.workspace }}/plugin/release.ps1" -Version $ver -OutputDir "${{ github.workspace }}/plugin/release"
+          & "${{ github.workspace }}/scripts/release.ps1" -Version $ver -OutputDir "${{ github.workspace }}/release"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Attach asset to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: plugin/release/dsh-suite-*.zip
+          files: release/dsh-suite-*.zip
           generate_release_notes: true
