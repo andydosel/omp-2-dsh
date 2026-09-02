@@ -55,7 +55,11 @@ omp-2-dsh/
 - **pnpm 11**(仓库根 `packageManager` 已钉 `pnpm@11.7.0`)。
 - **dsh 已发布的 CLI**:`npm i -g @deepseek-ai/dsh`(`dsh web` 首次启动会自动
   初始化 `web` profile);或用本地 dsh monorepo 构建(`start.ps1 -DshRoot <path>`)。
-- **`DEEPSEEK_API_KEY`** 环境变量,启动前设置。
+- **dsh 版本目标**:本套件对齐 **`0.1.1-rc.2`**(所有 `@deepseek-ai/dsh-*`
+  依赖与 `cordis@4.0.1` 已按该版本 reconcile)。模式状态(mode 开关、worker
+  roster、advisor/wechat 状态)是**插件自有状态**,持久化为
+  `$DSH_HOME/storages/*-state.json`(重启后 UI 仍可读);`/vibe restore` 与
+  `/compact restore` 一键重放运行时作用域。
 
 ## 构建(一次性)
 
