@@ -11,7 +11,7 @@
 
 - 启动:`DEEPSEEK_API_KEY=<key> pnpm dsh --profile web --patch C:/Users/Vantage_XLST/Documents/dsh-plugin/.e2e-scratch/cordis.e2e.patch.yml --port 5199`
 - 会话管理:`POST /api/session.create`(可选 `agentPreset`/`cwd`)、`POST /api/session.prompt`、`POST /api/session.history`
-- **斜杠命令必须走 `POST /api/commands/execute`**,payload 形如 `{"type":"client-request","rpcId":"…","method":"commands/execute","payload":{"args":{"agentId":"<sessionId>","line":"/compact"}}}`;
+- **斜杠命令必须走 `POST /api/commands/execute`**(HTTP POST,Typert Gateway 拦截 `/api` channel,非 WebSocket;WebSocket `/api/events.mux`/`/api/events.host` 仅为 server→browser 下行事件流),payload 形如 `{"type":"client-request","rpcId":"…","method":"commands/execute","payload":{"args":{"agentId":"<sessionId>","line":"/compact","images":[]}}}`(`images` 为 rc.2 必填字段,省略会报 `missing "images"`;点号形式 `POST /api/commands.execute` 会 404);
   命令目录用 `POST /api/commands/list`(payload `{"args":{"agentId":"<sessionId>"}}`)。
 - 信封格式:请求 `{type:'client-request',rpcId,method,payload}`,响应 `{type:'server-response',rpcId,result:{ok:true,value}|{ok:false,error}}`。
 - 逐轮等待:轮询 `session.history` 直到出现 `turn/end`。
