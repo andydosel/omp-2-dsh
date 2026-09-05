@@ -111,12 +111,12 @@
     # keeps the account (same iLink bot account is mutually exclusive; the
     # later starter gets 403s). The row is wired so activation is a config
     # flip: set `enabled: true`, stop the hermes gateway first, and point
-    # `stateDir` at hermes's `weixin/` dir to reuse its accounts/pairing data.
+    # `stateDir` at hermes's `weixin/` dir to reuse its accounts/pairing data
+    # (omit it to use the plugin default `$DSH_HOME/wechat`).
     - id: channel-wechat
       name: '@dsh-plugin/dsh-channel-wechat'
       config:
         enabled: false
-        stateDir: 'C:/Users/Vantage_XLST/AppData/Local/hermes/weixin'
 
 # ── web preset selection ────────────────────────────────────────────────────
 #
