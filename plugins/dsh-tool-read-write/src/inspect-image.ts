@@ -192,7 +192,7 @@ export function applyInspectImageTool(ctx: Context, config: InspectImageConfig):
           { type: 'image', attachment: ref },
           { type: 'text', text: args.question },
         ],
-        source: { kind: 'plugin', plugin: 'dsh-tool-read-write' },
+        source: { kind: 'dsh-tool-read-write' },
       })
       const timeoutSignal = AbortSignal.timeout(config.timeoutMs)
       const signal = AbortSignal.any([exec.signal, timeoutSignal])

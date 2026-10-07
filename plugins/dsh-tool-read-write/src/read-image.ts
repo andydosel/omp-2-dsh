@@ -200,7 +200,7 @@ export function applyReadImageTool(ctx: Context): void {
       if (exec.parent !== undefined) {
         exec.deferContext(createUserMessage({
           content: imageReadContent(value),
-          source: { kind: 'plugin', plugin: 'dsh-tool-read-write' },
+          source: { kind: 'dsh-tool-read-write' },
         }))
       }
       return value

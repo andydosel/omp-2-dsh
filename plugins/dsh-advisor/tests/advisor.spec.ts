@@ -56,6 +56,7 @@ function makePrimary(status: Agent['status'] = 'idle'): Agent {
     version: SESSION_FORMAT_VERSION,
     id: SessionId('primary'),
     createdAt: Date.now(),
+    isSeeded: false,
     cwd: tmp,
   })
   return makeFakeAgent('primary', session, { status })
@@ -264,8 +265,7 @@ describe('delta feeding', () => {
 
     appendUserMessage(primary.session, 'user said this')
     appendUserMessage(primary.session, 'advisor said that', {
-      kind: 'plugin',
-      plugin: 'advisor',
+      kind: 'dsh-advisor',
       form: 'notice',
       summary: 'advisor (nit): that',
     })
@@ -437,7 +437,7 @@ describe('advise observation and delivery routing', () => {
     attach(makeConfig({ immuneTurns: 2 }))
     await bindPrimary()
     const reviewer = ctx.created[0]!
-    const inbox = primary.inbox as { hasPending: boolean }
+    const inbox = primary.inbox as { nextTurn: unknown[] }
 
     let pair = appendAdviseCall(reviewer.session, 'concern', 'first', 'c1')
     ctx.emit('session/event', reviewer.session, pair.call)
@@ -460,12 +460,12 @@ describe('advise observation and delivery routing', () => {
     // Two completed primary turns exhaust the budget of two. Queued work at
     // close keeps the terminal flag off so the next concern can steer.
     for (let turn = 1; turn <= 2; turn++) {
-      inbox.hasPending = true
+      inbox.nextTurn.push({})
       const end = appendTurnEnd(primary.session, turn)
       ctx.emit('session/event', primary.session, end)
       await flush()
     }
-    inbox.hasPending = false
+    inbox.nextTurn.length = 0
     pair = appendAdviseCall(reviewer.session, 'concern', 'third', 'c3')
     ctx.emit('session/event', reviewer.session, pair.call)
     ctx.emit('session/event', reviewer.session, pair.result)
@@ -531,11 +531,11 @@ describe('reset signals', () => {
     const second = appendUserMessage(primary.session, 'second')
     ctx.emit('session/event', primary.session, second)
     const summary = appendUserMessage(primary.session, 'summarized')
-    const firstSurfaceSeq = primary.session.events.find(event => event.type === 'user/message')!.seq
+    const firstSurfaceSeq = primary.session.snapshotEvents().find(event => event.type === 'user/message')!.seq
     const replaceEvent = (primary.session as Session).append(
       'user/message',
       summary.data,
-      { surfaceOp: { op: 'replace', start: firstSurfaceSeq, end: firstSurfaceSeq }, sourceEventSeqs: [firstSurfaceSeq] },
+      { surfaceOp: { op: 'replace', startSeq: firstSurfaceSeq, endSeq: firstSurfaceSeq }, sourceEventSeqs: [firstSurfaceSeq] },
     )
     ctx.emit('session/event', primary.session, replaceEvent)
     await flush()
@@ -544,18 +544,18 @@ describe('reset signals', () => {
     expect(ctx.createSpy).toHaveBeenCalledTimes(2)
   })
 
-  it('resets on agent/session-start with source resume', async () => {
+  it('resets on agent/created with source resume', async () => {
     attach()
     await bindPrimary()
     expect(ctx.createSpy).toHaveBeenCalledTimes(1)
 
-    ctx.emit('agent/session-start', { agent: primary, source: 'resume' })
+    ctx.emit('agent/created', { agent: primary, source: 'resume' })
     await flush()
     await flush()
     expect(ctx.createSpy).toHaveBeenCalledTimes(2)
 
     // A startup source is not a reset signal.
-    ctx.emit('agent/session-start', { agent: primary, source: 'startup' })
+    ctx.emit('agent/created', { agent: primary, source: 'startup' })
     await flush()
     expect(ctx.createSpy).toHaveBeenCalledTimes(2)
   })
@@ -569,6 +569,7 @@ describe('reset signals', () => {
       version: SESSION_FORMAT_VERSION,
       id: SessionId('fork-1'),
       createdAt: Date.now(),
+      isSeeded: false,
       parentSession: primary.id,
     })
     ctx.emit('session/created', fork)
@@ -580,6 +581,7 @@ describe('reset signals', () => {
       version: SESSION_FORMAT_VERSION,
       id: SessionId('sub-1'),
       createdAt: Date.now(),
+      isSeeded: false,
       parentSession: primary.id,
       origin: 'subagent',
     })

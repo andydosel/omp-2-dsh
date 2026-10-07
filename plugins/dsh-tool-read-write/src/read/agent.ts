@@ -98,12 +98,16 @@ function assistantText(message: Message): string {
   return blocks.map(block => block.text).join('\n')
 }
 
-/** Render a tool-result message body, eliding oversized output with the truncation marker. */
+/**
+ * Render a tool-result message body, eliding oversized output with the
+ * truncation marker. A tool-role message carries its result blocks directly —
+ * `toolCallId`/`isError` live at the message top level, not inside a wrapping
+ * `tool-result` block.
+ */
 function toolResultBody(message: ToolResultMessage, maxChars: number): { text: string; elided: boolean } {
-  const block = message.content[0]
-  if (block === undefined) return { text: '', elided: false }
   const inner: string[] = []
-  for (const content of block.content) {
+  if (message.isError === true) inner.push(`[tool error: ${message.toolCallId}]`)
+  for (const content of message.content) {
     if (content.type === 'text') inner.push(content.text)
     else inner.push(`[${content.type}]`)
   }
@@ -131,7 +135,7 @@ export function renderAgentTranscript(session: Session, maxToolResultChars: numb
   // events pair that id with the tool name.
   const toolNames = new Map<string, string>()
 
-  for (const event of session.events) {
+  for (const event of session.snapshotEvents()) {
     if (event.type === 'tool/call') {
       toolNames.set(event.data.callId, event.data.name)
       continue
@@ -157,7 +161,7 @@ export function renderAgentTranscript(session: Session, maxToolResultChars: numb
       }
       case 'tool/result': {
         messageCount += 1
-        const name = toolNames.get(event.data.message.source.callId)
+        const name = toolNames.get(event.data.message.toolCallId)
         parts.push(`── tool result${name !== undefined ? `: ${name}` : ''} (seq ${event.seq}) ──`)
         const body = toolResultBody(event.data.message, maxToolResultChars)
         if (body.elided) elided = true
@@ -170,7 +174,7 @@ export function renderAgentTranscript(session: Session, maxToolResultChars: numb
   // Title block: the address plus durable session metadata.
   const header: string[] = [`# ${AGENT_SCHEME}${session.id}`]
   header.push(`created: ${new Date(session.header.createdAt).toISOString()}`)
-  const lastReal = [...session.events].reverse().find(event => event.type !== 'session/end-seed')
+  const lastReal = session.snapshotEvents().findLast(event => event.type !== 'session/end-seed')
   header.push(`updated: ${new Date(lastReal?.time ?? session.header.createdAt).toISOString()}`)
   header.push(`messages: ${messageCount}`)
   if (session.header.parentSession !== undefined) header.push(`parent: ${session.header.parentSession}`)

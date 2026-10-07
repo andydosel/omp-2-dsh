@@ -37,9 +37,10 @@ declare module '@deepseek-ai/cordis' {
  * an open turn) and a user-switch narration notice. UIs observe flips through
  * the plugin store.
  *
- * Cross-plugin mutex contract (vibe-mode etc.): read via
- * `ctx.get('compactMode')` as
- * `{ get(agent: Agent): { active: boolean; pending?: boolean } } | undefined`.
+ * Cross-plugin read contract: consumers read `ctx.get('compactMode')` as
+ * `{ get(agent: Agent): { active: boolean; pending?: boolean } } | undefined`
+ * — the mode-ui projection uses it for the compact badge, and other exclusive
+ * modes use it for mutual exclusion.
  */
 export class CompactModeController extends Service {
   /** Plugin-owned mode state (active flag), persisted to JSON. */
@@ -80,8 +81,11 @@ export class CompactModeController extends Service {
 
     // Resume/fork: seed the last-narrated marker from the store so a resumed
     // compact session doesn't re-narrate the entry it already told the model.
-    ctx.on('agent/session-start', ({ agent }) => {
+    // `agent/created` is serial and awaited, so this handler stays synchronous
+    // (it must not await its own agent's lifecycle).
+    ctx.on('agent/created', ({ agent }): undefined => {
       this.lastNarrated.set(agent.session, this.store.get(agent.session.id).active)
+      return undefined
     })
   }
 
@@ -114,7 +118,7 @@ export class CompactModeController extends Service {
     const pending = this.pendingIntents.get(session)
     const target = pending?.active ?? this.store.get(session.id).active
     if (active === target) return 'noop'
-    if (hasOpenTurn(session.events)) {
+    if (hasOpenTurn(session.snapshotEvents())) {
       this.pendingIntents.set(session, { active, narrate: true })
       return this.store.get(session.id).active === active ? 'cancelled' : 'queued'
     }
@@ -152,7 +156,7 @@ export class CompactModeController extends Service {
       : 'The user switched this session back to the default mode.'
     return createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: 'plugin', plugin: 'dsh-compact-mode', form: 'notice', summary: text },
+      source: { kind: 'dsh-compact-mode', form: 'notice', summary: text },
     })
   }
 }

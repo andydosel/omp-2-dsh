@@ -23,12 +23,12 @@ import type { Agent, AgentHandle, AgentOptions } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, isReplacementSurfaceEvent } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { appendDelegatedPolicyOverrides, captureDelegatedPolicyOverrides } from '@deepseek-ai/dsh-subagent'
 import type { ResolvedAdvisorConfig } from './config.ts'
 import { DeltaObserver, serializeDelta, type FeedKind } from './delta.ts'
-import { ADVISE_TOOL, defineAdviseTool, type AdviseArgs } from './advise-tool.ts'
-import { ADVISOR_PLUGIN, advisoryMessage, decideDelivery, DeliveryController, readPrimaryState } from './delivery.ts'
+import { ADVISE_TOOL, type AdviseArgs } from './advise-tool.ts'
+import { ADVISOR_SOURCE_KIND, advisoryMessage, decideDelivery, DeliveryController, inboxHasPending, readPrimaryState } from './delivery.ts'
 import { EmissionGuard } from './emission-guard.ts'
+import { composeReviewer } from './reviewer.ts'
 import type { Severity } from './severity.ts'
 import { isInterrupting, isSeverity } from './severity.ts'
 import { discoverWatchdog, renderWatchdogGuidance, type WatchdogSource } from './watchdog.ts'
@@ -164,12 +164,17 @@ export class AdvisorRuntime {
 
   /** Register every root-ctx listener. Idempotent. */
   attach(): void {
-    this.ctx.on('agent/created', ({ agent }) => { void this.maybeBind(agent) })
+    // `agent/session-start` no longer exists: its `source` moved onto the
+    // serial, awaited `agent/created` payload, so binding and the resume reset
+    // share one handler (no second binding pass). This handler must stay
+    // synchronous — it never awaits its own owner's disposal or the agent.
+    this.ctx.on('agent/created', ({ agent, source }) => {
+      void this.maybeBind(agent)
+      if (source === 'resume' && this.isPrimary(agent)) this.scheduleReset('resume')
+      return undefined
+    })
     this.ctx.on('agent/disposed', ({ agent }) => {
       if (this.isPrimary(agent)) void this.teardownPrimary()
-    })
-    this.ctx.on('agent/session-start', ({ agent, source }) => {
-      if (this.isPrimary(agent) && source === 'resume') this.scheduleReset('resume')
     })
     this.ctx.on('agent/inbox/claimed', ({ agent, message }) => {
       if (this.isPrimary(agent) && message.source.kind === 'user') this.delivery.onUserInput()
@@ -331,7 +336,7 @@ export class AdvisorRuntime {
     if (event.type === 'turn/end') {
       const card = this.delivery.deferredCard
       // Terminal state is computed BEFORE the card delivery queues work.
-      this.delivery.onPrimaryTurnEnd(primary.inbox.hasPending)
+      this.delivery.onPrimaryTurnEnd(inboxHasPending(primary))
       if (card !== undefined) primary.inject(card)
       void this.flushDeltas()
       return
@@ -428,7 +433,7 @@ export class AdvisorRuntime {
   private pendingOverBudget(): boolean {
     const primary = this.primary
     if (primary === undefined) return false
-    const unobserved = primary.session.events.length - this.observer.nextSeq
+    const unobserved = primary.session.seq - this.observer.nextSeq
     return unobserved >= MID_TURN_FLUSH_EVENTS
   }
 
@@ -438,7 +443,7 @@ export class AdvisorRuntime {
       : 'advisor: new transcript activity'
     return createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: 'plugin', plugin: ADVISOR_PLUGIN, form: 'notice', summary },
+      source: { kind: ADVISOR_SOURCE_KIND, form: 'notice', summary },
     })
   }
 
@@ -550,7 +555,7 @@ export class AdvisorRuntime {
       sessionId,
       ...cwd !== undefined ? { meta: { cwd } } : {},
       agentOptions: this.reviewerAgentOptions(primary, spec),
-      setup: (agentCtx) => this.composeReviewer(agentCtx, spec, watchdog),
+      setup: (agentCtx, agent) => this.setupReviewer(agentCtx, agent, spec, watchdog),
     })
     return { id: handle.agent.id, name: spec.name, spec, agent: handle.agent, handle }
   }
@@ -574,47 +579,18 @@ export class AdvisorRuntime {
 
   /**
    * The reviewer's creation-time composition. Synchronous (composition only):
-   * preset join, tool restriction, scoped advise registration, delegated
-   * policy pin, and prompt sections.
+   * the shared {@link composeReviewer} recipe (preset join, tool restriction,
+   * scoped advise registration, delegated policy pin) plus the reviewer's own
+   * role/instructions/WATCHDOG prompt section.
    */
-  private composeReviewer(agentCtx: Context, spec: ReviewerSpec, watchdog: WatchdogSource): void {
-    const primary = this.requirePrimary()
-    // 1. Join the primary's preset composition (required: rosterless global
-    //    layers resolve empty otherwise).
-    agentCtx.get('agentPresets')?.composeFrom(agentCtx, primary.ctx)
-    // 2. Restrict inherited global tools to the allow-list, INTERSECTED with
-    //    the tools actually present in the reviewer's agent scope: the
-    //    default list names standard-preset tools, and a narrower preset
-    //    (e.g. minimal) simply does not carry every name. Dropped names are
-    //    logged as a warning; an empty intersection fails loud (nothing to
-    //    restrict to), which the caller surfaces as a visible reviewer error.
-    const reviewerAgent = agentCtx.agent as Agent
-    const present = new Set(agentCtx.tools.schemas(reviewerAgent).map(schema => schema.name))
-    const allowed = spec.tools.filter(name => present.has(name))
-    const dropped = spec.tools.filter(name => !present.has(name))
-    if (dropped.length > 0) {
-      this.ctx.logger.warn(
-        'dsh-advisor: reviewer "%s" tool names not present in the agent toolset (dropped): %s',
-        spec.name,
-        dropped.join(', '),
-      )
-    }
-    if (allowed.length === 0) {
-      throw new Error(
-        `dsh-advisor: reviewer "${spec.name}" has no usable tools in the agent toolset `
-        + `(configured: ${spec.tools.join(', ') || '(none)'}; `
-        + `known global tools: ${[...present].sort().join(', ') || '(none)'})`,
-      )
-    }
-    agentCtx.tools.restrict({ allow: allowed })
-    // 3. Register the scoped advise tool (mask-immune: scoped registrations
-    //    are not affected by the allow mask).
-    agentCtx.tools.register(defineAdviseTool())
-    // 4. Pin delegated policy: inherit the primary's explicit sandbox override
-    //    and pin approval to 'never' (read-only + advise-only permissions).
-    const inherited = captureDelegatedPolicyOverrides(primary)
-    appendDelegatedPolicyOverrides((agentCtx.agent as Agent).session, inherited)
-    // 5. Reviewer prompt: role + instructions + WATCHDOG attention blocks.
+  private setupReviewer(agentCtx: Context, agent: Agent, spec: ReviewerSpec, watchdog: WatchdogSource): void {
+    composeReviewer(agentCtx, agent, {
+      name: spec.name,
+      tools: spec.tools,
+      primary: this.requirePrimary(),
+      warn: (message, ...args) => { this.ctx.logger.warn(message, ...args) },
+    })
+    // Reviewer prompt: role + instructions + WATCHDOG attention blocks.
     agentCtx.systemPrompt.section({ name: 'advisor:role', order: 60, text: this.roleSection(spec, watchdog) })
   }
 
@@ -744,6 +720,6 @@ export class AdvisorRuntime {
   private isOwnMessage(event: SessionEvent): boolean {
     if (event.type !== 'user/message') return false
     const source = event.data.source
-    return source.kind === 'plugin' && source.plugin === ADVISOR_PLUGIN
+    return source.kind === ADVISOR_SOURCE_KIND
   }
 }

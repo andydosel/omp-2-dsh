@@ -17,17 +17,15 @@ import type { TreeNodeWithChildren } from '@dsh-plugin/tree-engine'
 import type { CompactModeEngine } from './engine.ts'
 import type { ReviewNodeContent } from './tree.ts'
 
-/** Structural probe for the optional plan-mode / vibe-mode services (type-only deps). */
+/** Structural probe for the optional plan-mode service (type-only dependency). */
 interface ModeProbe {
   get(agent: Agent): { active: boolean; pending?: boolean }
 }
 
-/** Whether another exclusive mode (plan/vibe) is active for the agent. */
+/** Whether plan mode is active for the agent (the remaining exclusive-mode conflict). */
 function conflictingMode(ctx: Context, agent: Agent): string | undefined {
   const plan = ctx.get('planMode') as ModeProbe | undefined
   if (plan?.get(agent).active) return 'plan mode'
-  const vibe = ctx.get('vibeMode') as ModeProbe | undefined
-  if (vibe?.get(agent).active) return 'vibe mode'
   return undefined
 }
 

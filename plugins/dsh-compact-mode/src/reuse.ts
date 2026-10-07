@@ -30,12 +30,12 @@ import {
   LlmError,
   contentHasImage,
   createUserMessage,
-  deepFreeze,
 } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, Message, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import { isSurfaceEvent } from '@deepseek-ai/dsh-session'
 import type { TokenMeasurement } from '@deepseek-ai/dsh-token-meter'
+import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { randomUUID } from 'node:crypto'
 
 /**
@@ -206,7 +206,7 @@ export async function summarizeWithLlm(
     ...input.messages,
     createUserMessage({
       content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
-      source: { kind: 'plugin', plugin: 'dsh-compact-mode' },
+      source: { kind: 'dsh-compact-mode' },
     }),
   ]
   const options = {
@@ -272,11 +272,11 @@ export async function reviseWithLlm(
     ...input.messages,
     createUserMessage({
       content: [{ type: 'text', text: `Current draft:\n${draft === '' ? '(none yet)' : draft}` }],
-      source: { kind: 'plugin', plugin: 'dsh-compact-mode' },
+      source: { kind: 'dsh-compact-mode' },
     }),
     createUserMessage({
       content: [{ type: 'text', text: `Revision instruction: ${instruction}` }],
-      source: { kind: 'plugin', plugin: 'dsh-compact-mode' },
+      source: { kind: 'dsh-compact-mode' },
     }),
   ]
   const options = {
@@ -339,7 +339,7 @@ export function selectCompactableRange(
   session: Session,
   measurement: TokenMeasurement,
   retainTokens: number,
-): { start: number; end: number } | null {
+): { start: SessionSeq; end: SessionSeq } | null {
   const pricedNodes = measurement.nodes
   if (pricedNodes.length === 0) return null
 
@@ -377,7 +377,7 @@ export function selectCompactableRange(
 interface CompactionEntryState {
   readonly openTurn: number | null
   readonly unmatchedCompactionStart: SessionEvent<'compaction/start'> | undefined
-  readonly latestEndSeedSeq: number | undefined
+  readonly latestEndSeedSeq: SessionSeq | undefined
 }
 
 /** Inspect the durable compaction-lock state of one session log (local port). */
@@ -386,7 +386,7 @@ export function inspectCompactionEntryState(events: readonly SessionEvent[]): Co
   let openTurnStateKnown = false
   let unmatchedCompactionStart: SessionEvent<'compaction/start'> | undefined
   let compactionEntryStateKnown = false
-  let latestEndSeedSeq: number | undefined
+  let latestEndSeedSeq: SessionSeq | undefined
   for (let index = events.length - 1; index >= 0; index -= 1) {
     // oxlint-disable-next-line typescript/no-non-null-assertion -- index in range
     const event = events[index]!
@@ -419,7 +419,7 @@ export function inspectCompactionEntryState(events: readonly SessionEvent[]): Co
 /** Reject an unmatched compaction marker unless a later seed boundary proves it stale. */
 function assertCompactionInactive(
   unmatchedCompactionStart: SessionEvent<'compaction/start'> | undefined,
-  latestEndSeedSeq: number | undefined,
+  latestEndSeedSeq: SessionSeq | undefined,
   stage: string,
 ): void {
   if (unmatchedCompactionStart === undefined
@@ -439,7 +439,7 @@ function assertCompactionInactive(
  * @param stage - operation label included in the busy diagnostic.
  */
 export function assertNoActiveCompaction(session: Session, stage: string): void {
-  const entryState = inspectCompactionEntryState(session.events)
+  const entryState = inspectCompactionEntryState(session.snapshotEvents())
   assertCompactionInactive(
     entryState.unmatchedCompactionStart,
     entryState.latestEndSeedSeq,
@@ -458,9 +458,9 @@ export function assertNoActiveCompaction(session: Session, stage: string): void 
  */
 export function validateSurfaceRegion(
   session: Session,
-  start: number,
-  end: number,
-): { start: number; end: number; shadowedSeqs: number[] } {
+  start: SessionSeq,
+  end: SessionSeq,
+): { start: SessionSeq; end: SessionSeq; shadowedSeqs: SessionSeq[] } {
   const nodes = session.surface.nodes
   const startIdx = nodes.indexOf(start)
   const endIdx = nodes.indexOf(end)
@@ -495,14 +495,12 @@ export function validateSurfaceRegion(
  */
 export function buildSummarizationInput(
   session: Session,
-  shadowedSeqs: readonly number[],
+  shadowedSeqs: readonly SessionSeq[],
 ): SummarizationInput {
   const header = session.requestHeader()
-  const events = session.events
   const regionMessages = shadowedSeqs
-    // shadowedSeqs are current surface seqs, so each is a valid log index.
-    // oxlint-disable-next-line typescript/no-non-null-assertion -- surface seqs index the log
-    .map(seq => session.deriveEventMessage(events[seq]!))
+    .map(seq => session.eventAt(seq))
+    .map(event => event === undefined ? null : session.deriveEventMessage(event))
     .filter((message): message is Message => message !== null)
   return {
     ...header?.system === undefined ? {} : { system: header.system },
@@ -551,11 +549,11 @@ export function commitSummaryAndCheckpoint(
   result: SummaryResult,
   checkpoint: UserMessage,
   shadowed: {
-    range: { start: number; end: number }
-    shadowedSeqs: number[]
+    range: { start: SessionSeq; end: SessionSeq }
+    shadowedSeqs: SessionSeq[]
     shadowedTokenCount: number
   },
-): number {
+): SessionSeq {
   const callProvenance = result.llmStreamCall === true
     ? { rawOutput: result.rawOutput, llmStreamCall: true as const }
     : result.rawOutput === undefined ? {} : { rawOutput: result.rawOutput }
@@ -575,7 +573,7 @@ export function commitSummaryAndCheckpoint(
     ...result.usage === undefined ? {} : { usage: result.usage },
   })
   session.append('user/message', checkpoint, {
-    surfaceOp: { op: 'replace', start: shadowed.range.start, end: shadowed.range.end },
+    surfaceOp: { op: 'replace', startSeq: shadowed.range.start, endSeq: shadowed.range.end },
     sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowed.shadowedSeqs],
   })
   return summaryEvent.seq

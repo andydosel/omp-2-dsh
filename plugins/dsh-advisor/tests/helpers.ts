@@ -5,7 +5,7 @@
  */
 
 import { vi, type Mock } from 'vitest'
-import { CallId, createAssistantMessage, createToolResultMessage, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 
@@ -63,7 +63,7 @@ export class FakeContext {
       sessionId: SessionId
       meta?: { cwd?: string }
       agentOptions?: Record<string, unknown>
-      setup?: (agentCtx: FakeAgentContext) => unknown
+      setup?: (agentCtx: FakeAgentContext, agent: Agent) => unknown
     }): Promise<AgentHandle> => {
       const session = Session.create(options.sessionId)
       const agent = makeFakeReviewerAgent(options.sessionId, options.agentOptions ?? {}, session)
@@ -71,7 +71,7 @@ export class FakeContext {
         composedPreset: this.composedPreset,
         ...this.reviewerToolNames !== undefined ? { toolNames: this.reviewerToolNames } : {},
       })
-      options.setup?.(agentCtx)
+      options.setup?.(agentCtx, agent)
       const entry: CreatedReviewer = {
         agent,
         session,
@@ -155,7 +155,7 @@ export function makeFakeAgent(
       model: 'primary-model',
       ...overrides.options,
     },
-    inbox: { hasPending: false },
+    inbox: { nextTurn: [], nextStep: [] },
     ctx: { get: () => undefined },
     cancel: vi.fn(),
     whenIdle: vi.fn(async () => {}),
@@ -196,13 +196,13 @@ export function appendUserMessage(
 /** Append an assistant message to a session. */
 export function appendAssistantMessage(session: Session, text: string): SessionEvent {
   const message = createAssistantMessage({ content: [{ type: 'text', text }], provider: 'test-provider', model: 'test-model' })
-  return session.append('assistant/message', { turn: 1, step: 1, message }, { surfaceOp: 'append' })
+  return session.append('assistant/message', { turn: 1, step: 1, message, stream: [] }, { surfaceOp: 'append' })
 }
 
 /** Append a tool result to a session. */
 export function appendToolResult(session: Session, callId: string, text: string): SessionEvent {
   const message = createToolResultMessage({
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     content: [{ type: 'text', text }],
     isError: false,
   })
@@ -220,7 +220,7 @@ export function appendAdviseCall(session: Session, severity: string, note: strin
   const call = session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: 'advise',
     arguments: JSON.stringify({ severity, note }),
   })
@@ -241,9 +241,6 @@ export function messageText(message: UserMessage): string {
   const block = message.content[0]
   if (block === undefined) return ''
   if (block.type === 'text') return block.text
-  if (block.type === 'tool-result') {
-    return block.content.map(inner => (inner.type === 'text' ? inner.text : `[${inner.type}]`)).join('')
-  }
   return ''
 }
 

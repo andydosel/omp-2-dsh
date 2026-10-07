@@ -25,11 +25,10 @@ import { transform } from 'lightningcss'
  */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ] as const
 
 /**
@@ -60,15 +59,12 @@ const VENDORED_LIBRARY = /^@deepseek-ai\/(cosmokit|schemastery)(\/|$)/
 const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
 
 /**
- * Documented TEMPORARY exemption, not a platform module (hence not in
- * PLATFORM_MODULES): the snapshot-store engine lives in runtime pending its
- * promotion-time rehoming. This package only ever imports it as types, but
- * the exemption is kept so the external table matches the upstream preset.
+ * Externals resolved from the loader module table: the platform seed entries
+ * themselves. 0.2.0-rc.2 deleted the `@deepseek-ai/dsh-client-runtime/client`
+ * preload (`PRELOADED_CLIENT_EXTERNALS` is empty upstream now), so the table is
+ * exactly `PLATFORM_MODULES` — no exemption rides along.
  */
-const RUNTIME_STORE_EXEMPTION = '@deepseek-ai/dsh-client-runtime/client'
-
-/** Externals resolved from the loader module table: the platform seed entries plus the documented runtime exemption. */
-export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES, RUNTIME_STORE_EXEMPTION]
+export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES]
 
 /** Package id stamped into the __ModuleLoader__.load handoff. */
 export const PACKAGE_ID = '@dsh-plugin/dsh-mode-ui'

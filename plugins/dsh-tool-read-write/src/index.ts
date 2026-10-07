@@ -27,6 +27,17 @@ import type { InspectImageMode } from './inspect-image.ts'
 import { READ_MAX_BYTES, READ_MAX_LINE_LENGTH } from './read/render.ts'
 import { FsSandboxController } from './sandbox.ts'
 
+/**
+ * Where this plugin's model-visible messages (inspect-image questions, read
+ * deferrals of image output) came from. The shared `MessageSourceMap` has no
+ * catch-all `plugin` kind, so each producer declares its own.
+ */
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'dsh-tool-read-write': { kind: 'dsh-tool-read-write' }
+  }
+}
+
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'dsh-tool-read-write'
 

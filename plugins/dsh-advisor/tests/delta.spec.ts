@@ -5,17 +5,16 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DeltaObserver, estimateTokens, serializeDelta } from '../src/delta.ts'
-import { ADVISOR_PLUGIN } from '../src/delivery.ts'
+import { ADVISOR_SOURCE_KIND } from '../src/delivery.ts'
 import { appendAssistantMessage, appendToolResult, appendUserMessage, messageText } from './helpers.ts'
 
 /** Predicate matching the runtime's self-advice filter. */
 function ownMessagePredicate(event: SessionEvent): boolean {
   return event.type === 'user/message'
-    && event.data.source.kind === 'plugin'
-    && event.data.source.plugin === ADVISOR_PLUGIN
+    && event.data.source.kind === ADVISOR_SOURCE_KIND
 }
 
 describe('DeltaObserver', () => {
@@ -27,14 +26,14 @@ describe('DeltaObserver', () => {
 
     const observer = new DeltaObserver(ownMessagePredicate)
     // Simulate the live feed: observe each event as it lands.
-    for (const event of session.events) observer.observe(event)
+    for (const event of session.snapshotEvents()) observer.observe(event)
 
     const batch = observer.collect(session)
     expect(batch.messages.map(messageText)).toEqual(['user prompt', 'assistant reply', 'tool output'])
     expect(batch.seqs).toEqual([0, 1, 2])
     expect(batch.dropped).toBe(0)
     // The cursor advanced to the log end; a second collect returns nothing.
-    expect(observer.nextSeq).toBe(session.events.length)
+    expect(observer.nextSeq).toBe(session.seq)
     expect(observer.collect(session).messages).toEqual([])
   })
 
@@ -48,7 +47,7 @@ describe('DeltaObserver', () => {
     expect(observer.collect(session).messages).toHaveLength(0)
     // The observed event is stale after the cursor passed it.
     expect(observer.observe(first)).toBe(false)
-    expect(observer.nextSeq).toBe(session.events.length)
+    expect(observer.nextSeq).toBe(session.seq)
   })
 
   it('drops shadowed nodes and own messages from a collected batch', () => {
@@ -57,10 +56,10 @@ describe('DeltaObserver', () => {
     appendUserMessage(session, 'second')
     // Replace node 0 with a summary (compaction-style rewrite).
     const summary = createUserMessage({ content: [{ type: 'text', text: 'summary' }], source: { kind: 'user' } })
-    session.append('user/message', summary, { surfaceOp: { op: 'replace', start: 0, end: 0 }, sourceEventSeqs: [0] })
+    session.append('user/message', summary, { surfaceOp: { op: 'replace', startSeq: SessionSeq(0), endSeq: SessionSeq(0) }, sourceEventSeqs: [SessionSeq(0)] })
 
     const observer = new DeltaObserver(ownMessagePredicate)
-    for (const event of session.events) observer.observe(event)
+    for (const event of session.snapshotEvents()) observer.observe(event)
     const batch = observer.collect(session)
     // Node 0 (shadowed) is dropped from the surface entirely; the
     // replacement node (surface position 0) and node 1 survive, in surface
@@ -95,13 +94,12 @@ describe('DeltaObserver', () => {
     const session = Session.create(SessionId('primary'))
     appendUserMessage(session, 'user text')
     appendUserMessage(session, 'advisor says fix', {
-      kind: 'plugin',
-      plugin: ADVISOR_PLUGIN,
+      kind: ADVISOR_SOURCE_KIND,
       form: 'notice',
       summary: 'advisor (nit): fix',
     })
     const observer = new DeltaObserver(ownMessagePredicate)
-    for (const event of session.events) observer.observe(event)
+    for (const event of session.snapshotEvents()) observer.observe(event)
     const batch = observer.collect(session)
     expect(batch.messages.map(messageText)).toEqual(['user text'])
     expect(batch.dropped).toBe(1)
@@ -155,7 +153,7 @@ describe('serializeDelta', () => {
     const message = session.deriveMessages()[0]
     expect(message).toBeDefined()
     const serialized = serializeDelta('delta', [message], [0], 8192, 'primary')
-    expect(serialized.text).toContain('<entry seq="0" role="user"')
+    expect(serialized.text).toContain('<entry seq="0" role="tool"')
     expect(serialized.text).toContain('tool-result')
   })
 })

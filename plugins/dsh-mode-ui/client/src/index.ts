@@ -1,27 +1,36 @@
 /**
- * Mode-status UI plugin, browser half: registers four status badges into the
+ * Mode-status UI plugin, browser half: registers three status badges into the
  * session header's `conversation.session.header.utilities` list slot
  * (right-aligned utilities band). Each badge reads its host-computed
  * projection via the standard-kit `useProjection` (zero client-side folding)
  * and executes the matching slash command through `ctx.remote.commands`
  * (plan-chip interaction pattern). The `dsh.client.inject` edges name the
- * boot modules this face depends on, copied from the ui-plan package
+ * boot modules this face depends on, copied from the ui-open-in-app package
  * declaration: api-remotes (ctx.remote), client-locale (dictionary infra),
- * and ui-conversation (the header utilities SlotMap declaration); the
- * runtime edge arrives transitively through ui-conversation's own inject.
+ * ui-conversation (the header utilities SlotMap declaration), ui-renderer
+ * (ctx.slots) and ui-session (the session-scope standard props: sessionId +
+ * useProjection); the runtime edge arrives transitively through
+ * ui-conversation's own inject.
  *
  * @module @dsh-plugin/dsh-mode-ui/client
  */
 
-import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // Type-only: pulls the ui-conversation SlotMap merge (the header.utilities
 // list seat).
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-// Type-only: pulls the four SessionProjectionMap merges for useProjection.
+// Type-only: pulls the SessionStandardProps merge (branded sessionId +
+// useProjection) that a session-scope slot's runtime props extend.
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+// Type-only: pulls the `ctx.slots` renderer registry merge.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+// Type-only: pulls the `ctx.remote` Client Remote surface (commands included).
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
+// Type-only: pulls the three SessionProjectionMap merges for useProjection.
 import type {} from '../../src/types.ts'
 import { AdvisorBadge } from './badges/AdvisorBadge.tsx'
 import { CompactBadge } from './badges/CompactBadge.tsx'
-import { VibeBadge } from './badges/VibeBadge.tsx'
 import { WechatBadge } from './badges/WechatBadge.tsx'
 
 export type { ModeBadgeInjected } from './badges/ModeBadge.tsx'
@@ -44,7 +53,7 @@ interface CommandAdmission {
  * admission shape.
  * @returns null on admitted execution; a user-visible failure line otherwise.
  */
-async function executeCommand(ctx: ClientContext, sessionId: SessionId, command: string): Promise<string | null> {
+async function executeCommand(ctx: Context, sessionId: SessionId, command: string): Promise<string | null> {
   const execute = ctx.remote.commands.execute as unknown as (agentId: SessionId, line: string) => Promise<CommandAdmission>
   const result = await execute(sessionId, command)
   if (!result.ok) return `${result.error?.message ?? 'command failed'} (${result.error?.code ?? 'unknown'})`
@@ -53,13 +62,13 @@ async function executeCommand(ctx: ClientContext, sessionId: SessionId, command:
 }
 
 /**
- * Client plugin body: register the four mode-status badges over the command
- * channel. Four independent list entries, ascending order (compact → vibe →
- * advisor → wechat), each with its own inject face closing over
+ * Client plugin body: register the three mode-status badges over the command
+ * channel. Three independent list entries, ascending order (compact → advisor
+ * → wechat), each with its own inject face closing over
  * `ctx.remote.commands` (plan-chip pattern).
  * @param ctx - client root context.
  */
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: Context): void {
   ctx.slots.inject(
     'conversation.session.header.utilities',
     () => ctx.slots.register({
@@ -76,19 +85,8 @@ export function apply(ctx: ClientContext): void {
     'conversation.session.header.utilities',
     () => ctx.slots.register({
       name: 'conversation.session.header.utilities',
-      id: 'mode-ui-vibe',
-      order: 20,
-      inject: (sessionId: SessionId) => ({
-        runCommand: (command: string) => executeCommand(ctx, sessionId, command),
-      }),
-    }, VibeBadge),
-  )
-  ctx.slots.inject(
-    'conversation.session.header.utilities',
-    () => ctx.slots.register({
-      name: 'conversation.session.header.utilities',
       id: 'mode-ui-advisor',
-      order: 30,
+      order: 20,
       inject: (sessionId: SessionId) => ({
         runCommand: (command: string) => executeCommand(ctx, sessionId, command),
       }),
@@ -99,7 +97,7 @@ export function apply(ctx: ClientContext): void {
     () => ctx.slots.register({
       name: 'conversation.session.header.utilities',
       id: 'mode-ui-wechat',
-      order: 40,
+      order: 30,
       inject: (sessionId: SessionId) => ({
         runCommand: (command: string) => executeCommand(ctx, sessionId, command),
       }),

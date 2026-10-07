@@ -13,7 +13,7 @@
  * @module @dsh-plugin/dsh-advisor/delta
  */
 
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, Message } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { deriveEventMessage } from '@deepseek-ai/dsh-session'
 
@@ -76,9 +76,10 @@ export class DeltaObserver {
    * @returns the projected messages plus seqs and drop statistics.
    */
   collect(session: Session): DeltaBatch {
-    const events = session.events
+    const events = session.snapshotEvents()
+    const end = session.seq
     const uncollected = new Set<number>()
-    for (let seq = this.cursor; seq < events.length; seq++) uncollected.add(seq)
+    for (let seq = this.cursor; seq < end; seq++) uncollected.add(seq)
     const messages: Message[] = []
     const seqs: number[] = []
     let dropped = 0
@@ -101,7 +102,7 @@ export class DeltaObserver {
       messages.push(message)
       seqs.push(seq)
     }
-    this.cursor = events.length
+    this.cursor = end
     return { messages, seqs, dropped }
   }
 
@@ -112,7 +113,7 @@ export class DeltaObserver {
 
   /** Skip everything already in the log (fresh attach without a baseline). */
   fastForward(session: Session): void {
-    this.cursor = session.events.length
+    this.cursor = session.seq
   }
 }
 
@@ -135,42 +136,35 @@ export interface SerializedDelta {
   readonly truncated: boolean
 }
 
-/** One serialized message entry inside the feed frame. */
-function renderEntry(seq: number, message: Message): string {
-  const role = message.role
-  let text = ''
-  for (const block of message.content) {
-    switch (block.type) {
-      case 'text':
-        text += block.text
-        break
-      case 'reasoning':
-        text += `<reasoning>${block.text}</reasoning>`
-        break
-      case 'image':
-        text += '[image]'
-        break
-      case 'tool-call':
-        text += `<tool-call name="${block.name}" arguments="${block.arguments.replace(/"/g, '&quot;')}"/>`
-        break
-      case 'tool-result':
-        text += `<tool-result tool-call-id="${block.toolCallId}" is-error="${String(block.isError ?? false)}">\n`
-        for (const inner of block.content) {
-          if (inner.type === 'text') text += inner.text
-          else text += `[${inner.type}]`
-        }
-        text += '\n</tool-result>'
-        break
-      default: {
-        const fallback = block as { type?: string }
-        text += `[${fallback.type ?? 'unknown'}]`
-      }
+/** Render one content block to its reviewer-feed text. */
+function renderBlock(block: ContentBlock): string {
+  switch (block.type) {
+    case 'text':
+      return block.text
+    case 'reasoning':
+      return `<reasoning>${block.text}</reasoning>`
+    case 'image':
+      return '[image]'
+    case 'tool-call':
+      return `<tool-call name="${block.name}" arguments="${block.arguments.replace(/"/g, '&quot;')}"/>`
+    default: {
+      const fallback = block as { type?: string }
+      return `[${fallback.type ?? 'unknown'}]`
     }
   }
-  const source = message.source.kind === 'plugin'
-    ? ` source="plugin:${message.source.plugin}"`
-    : message.source.kind === 'user' ? '' : ` source="${message.source.kind}"`
-  return `<entry seq="${seq}" role="${role}"${source}>\n${text}\n</entry>`
+}
+
+/** One serialized message entry inside the feed frame. */
+function renderEntry(seq: number, message: Message): string {
+  const inner = message.content.map(renderBlock).join('')
+  // A tool result is a first-class `role: 'tool'` message whose content is the
+  // result blocks directly; wrap it with the call identity so the reviewer
+  // prompt keeps the previous `<tool-result …>` framing.
+  const text = message.role === 'tool'
+    ? `<tool-result tool-call-id="${message.toolCallId}" is-error="${String(message.isError ?? false)}">\n${inner}\n</tool-result>`
+    : inner
+  const source = message.source.kind === 'user' ? '' : ` source="${message.source.kind}"`
+  return `<entry seq="${seq}" role="${message.role}"${source}>\n${text}\n</entry>`
 }
 
 /**

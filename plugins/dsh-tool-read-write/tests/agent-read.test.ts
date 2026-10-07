@@ -14,7 +14,7 @@ import type { ReadToolCaps, ReadValue } from '../src/read/index.ts'
 import { HarnessCtx, HarnessFs, makeExec, tempDir } from './helpers.ts'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { CallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
 const CAPS: ReadToolCaps = {
@@ -56,16 +56,17 @@ const assistant = (seq: number, time: number, content: ContentBlock[]): SessionE
       model: 'mock',
       source: { provider: 'mock', model: 'mock' },
     }),
+    stream: [],
   }, true)
 
 const toolCall = (seq: number, time: number, callId: string, name: string, args: string): SessionEvent =>
-  ev('tool/call', seq, time, { turn: 1, step: 1, callId, name, arguments: args })
+  ev('tool/call', seq, time, { turn: 1, step: 1, callId: ToolCallId(callId), name, arguments: args })
 
 const toolResult = (seq: number, time: number, callId: string, text: string): SessionEvent =>
   ev('tool/result', seq, time, {
     turn: 1,
     step: 1,
-    message: createToolResultMessage({ callId: CallId(callId), content: [{ type: 'text', text }], isError: false }),
+    message: createToolResultMessage({ callId: ToolCallId(callId), content: [{ type: 'text', text }], isError: false }),
   }, true)
 
 /** A worker-style log: task → assistant (text + tool call) → tool result → final answer. */
@@ -75,7 +76,7 @@ function workerLog(): SessionEvent[] {
     user(1, 200, 'Summarize the repo changes.'),
     assistant(2, 300, [
       { type: 'text', text: "I'll inspect the repository." },
-      { type: 'tool-call', id: CallId('call-1'), name: 'read', arguments: '{"path":"src/index.ts"}' },
+      { type: 'tool-call', id: ToolCallId('call-1'), name: 'read', arguments: '{"path":"src/index.ts"}' },
     ]),
     toolCall(3, 400, 'call-1', 'read', '{"path":"src/index.ts"}'),
     toolResult(4, 500, 'call-1', '1: export const name = "plugin"'),
@@ -86,9 +87,10 @@ function workerLog(): SessionEvent[] {
 function makeSession(id: string, events: SessionEvent[], header: Partial<{ parentSession: string; cwd: string; origin: 'subagent'; agentPreset: string }> = {}): Session {
   const sessionId = SessionId(id)
   return Session.create(sessionId, events, {
-    version: 0,
+    version: 4,
     id: sessionId,
     createdAt: 100,
+    isSeeded: false,
     ...header.parentSession !== undefined ? { parentSession: SessionId(header.parentSession) } : {},
     ...header.cwd !== undefined ? { cwd: header.cwd } : {},
     ...header.origin !== undefined ? { origin: header.origin } : {},

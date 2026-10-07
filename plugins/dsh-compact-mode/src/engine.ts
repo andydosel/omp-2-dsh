@@ -22,7 +22,7 @@ import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import { CompactionEngine, CompactionId, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { Session } from '@deepseek-ai/dsh-session'
+import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { CompactModeConfig, ResolvedConfig } from './config.ts'
 import { CompactModeConfigSchema, resolveConfig } from './config.ts'
 import { CompactModeController } from './mode.ts'
@@ -224,8 +224,8 @@ export class CompactModeEngine extends CompactionEngine {
    * throws `ManualCompactionError('busy')` — the review holds the lock.
    */
   override async compactRegion(
-    start: number,
-    end: number,
+    start: SessionSeq,
+    end: SessionSeq,
     agent: Agent,
     signal?: AbortSignal,
   ): Promise<CompactionResult> {
@@ -260,7 +260,7 @@ export class CompactModeEngine extends CompactionEngine {
       : 'The model context window was exceeded and local elision could not fit the request. Enter compact mode with /compact to review a compression draft, or start a new session.'
     agent.inject(createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: 'plugin', plugin: 'dsh-compact-mode', form: 'notice', summary: text },
+      source: { kind: 'dsh-compact-mode', form: 'notice', summary: text },
     }))
   }
 
@@ -288,8 +288,8 @@ async function compactSurfaceRegionPort(
   ctx: Context,
   config: ResolvedConfig,
   agent: Agent,
-  start: number,
-  end: number,
+  start: SessionSeq,
+  end: SessionSeq,
   signal?: AbortSignal,
 ): Promise<CompactionResult> {
   const session = agent.session
@@ -299,7 +299,7 @@ async function compactSurfaceRegionPort(
 
   // Current-turn ownership: region compactions must be enclosed in an open
   // turn (mirror compaction-basic's compactRegion).
-  const entry = inspectCompactionEntryState(session.events)
+  const entry = inspectCompactionEntryState(session.snapshotEvents())
   if (entry.openTurn === null) {
     throw new ManualCompactionError('busy', 'compactRegion requires an open turn (automatic compaction is enclosed in a turn)')
   }

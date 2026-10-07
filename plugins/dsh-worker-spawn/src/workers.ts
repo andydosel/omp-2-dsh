@@ -1,24 +1,24 @@
 /**
- * Per-director worker bookkeeping for vibe mode: childId → tier/turn counters,
- * the live roster state the `vibe/workers` projection folds, and the turn-end
- * promise table `vibe_wait` resolves against.
+ * Per-spawner worker bookkeeping: childId → tier/turn counters, the live
+ * roster state a roster sink folds, and the turn-end promise table a wait
+ * resolves against.
  *
  * A continuable child produces NO jobs; `agent/status` idle is not a
  * turn-end signal and `subagent/end` is epoch-granular. The only turn-precise
  * signal is the child session's own `turn/end` log event, paired with the
  * turn counter this registry maintains per dispatch (spawn = one turn, each
- * followup = the next FIFO turn).
+ * follow-up = the next FIFO turn).
  *
  * The registry is also the completion self-delivery owner: when a watched
- * worker's turn/end settles and NO `vibe_wait` consumed it inline, the
- * director session is STEERED with a `subagent-settled` notice (completion
+ * worker's turn/end settles and NO wait consumed it inline, the spawning
+ * session is STEERED with a `subagent-settled` notice (completion
  * self-delivery). The steer is gated on the consecutive-settle wake budget —
- * the same budget `vibe_spawn` refuses on — so the self-exciting wake chain
- * stays bounded. A wait that returned the result inline acked the turn; the
+ * the same budget a spawn refuses on — so the self-exciting wake chain stays
+ * bounded. A wait that returned the result inline acked the turn; the
  * waiter-table check in {@link WorkerRegistry.onTurnEnd} is the ack protocol
  * (no double delivery).
  *
- * @module @dsh-plugin/dsh-vibe-mode/workers
+ * @module @dsh-plugin/dsh-worker-spawn/workers
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -26,17 +26,17 @@ import type { SessionId, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { finalAssistantOutput } from '@deepseek-ai/dsh-subagent'
-import type { VibeTier, VibeWorkerState, VibeWorkerView } from './types.ts'
+import type { WorkerState, WorkerTier, WorkerView } from './types.ts'
 
 /** Cap on the completion preview carried by the self-delivery steer text. */
 const COMPLETION_PREVIEW_MAX_CHARS = 2000
 
-/** One live worker's bookkeeping under its director. */
+/** One live worker's bookkeeping under its spawner. */
 export interface WorkerRecord {
   /** Durable child session id, stable across activations. */
   readonly childId: SessionId
-  /** The tier the director spawned it under. */
-  readonly tier: VibeTier
+  /** The tier the worker was spawned under. */
+  readonly tier: WorkerTier
   /** Durable creation label from the spawn call. */
   readonly label: string
   /**
@@ -47,12 +47,12 @@ export interface WorkerRecord {
   /** Messages dispatched so far (spawn counts 1, each send +1). */
   dispatched: number
   /** Live roster state (starting → running ↔ idle, parked, dead). */
-  state: VibeWorkerState
+  state: WorkerState
   /** ISO timestamp of the last state transition. */
   lastActivity?: string
 }
 
-/** One pending `vibe_wait` outcome. */
+/** One pending wait outcome. */
 export interface TurnEndResult {
   readonly session: SessionId
   /** The turn number that ended. */
@@ -67,10 +67,10 @@ export interface TurnEndResult {
 }
 
 /**
- * Build one canonical `vibe_wait` result, omitting the `output` key entirely
- * when the worker produced no final text. The tool's canonical output must be
- * plain lossless JSON (the tools service snapshots it), and an `undefined`
- * field value would fail that boundary.
+ * Build one canonical wait result, omitting the `output` key entirely when the
+ * worker produced no final text. The canonical output must be plain lossless
+ * JSON (a tools service snapshots it), and an `undefined` field value would
+ * fail that boundary.
  */
 function turnEndResult(
   session: SessionId,
@@ -83,11 +83,11 @@ function turnEndResult(
     : { session, turn, status, output }
 }
 
-/** Options for one `waitForTurn` call. */
+/** Options for one {@link WorkerRegistry.waitForTurn} call. */
 export interface WaitForTurnOptions {
   /** Per-wait timeout in milliseconds; resolves `timeout` on expiry. */
   readonly timeoutMs: number
-  /** Caller cancellation; rejects `aborted` when it fires before resolution. */
+  /** Caller cancellation; rejects when it fires before resolution. */
   readonly signal: AbortSignal
   /** Called once on resolution to release the wake budget. */
   readonly onSettled?: () => void
@@ -105,13 +105,13 @@ function hasOpenTurn(events: readonly SessionEvent[]): boolean {
 
 /**
  * The roster state a worker should carry the moment the registry first
- * registers it (the `vibe_spawn`/`vibe_send` race: the child begins its turn
- * BEFORE the tool handler registers the record, so the `turn/start` firehose
- * event is already past and the firehose listener misses it). Seed from the
- * child's live log: an open turn means it is already running; a closed turn
- * means it is idle; nothing logged means it is still starting.
+ * registers it (the spawn/send race: the child begins its turn BEFORE the
+ * caller registers the record, so the `turn/start` firehose event is already
+ * past and the firehose listener misses it). Seed from the child's live log:
+ * an open turn means it is already running; a closed turn means it is idle;
+ * nothing logged means it is still starting.
  */
-function seedState(events: readonly SessionEvent[] | undefined): VibeWorkerState {
+function seedState(events: readonly SessionEvent[] | undefined): WorkerState {
   if (events === undefined || events.length === 0) return 'starting'
   if (hasOpenTurn(events)) return 'running'
   return completedTurnsOf(events) > 0 ? 'idle' : 'starting'
@@ -126,11 +126,11 @@ export function completedTurnsOf(events: readonly SessionEvent[]): number {
 }
 
 /**
- * One director's worker registry. Created at mode entry, disposed at mode
- * exit (or with the agent scope). Owns the root-ctx `session/event` listener
- * that routes `turn/end` to waiting `vibe_wait` calls (and `turn/start` to
- * the roster state), the consecutive settle-wake budget that mirrors
- * `tool-jobs`' `maxConsecutiveWakes`, and the completion self-delivery steer.
+ * One spawner's worker registry. Created when a dispatch surface engages,
+ * disposed when it unwinds (or with the agent scope). Owns the root-ctx
+ * `session/event` listener that routes `turn/end` to waiting calls (and
+ * `turn/start` to the roster state), the consecutive settle-wake budget that
+ * bounds the self-exciting chain, and the completion self-delivery steer.
  */
 export class WorkerRegistry {
   /** Workers by child id, in spawn order. */
@@ -138,27 +138,27 @@ export class WorkerRegistry {
   /** Turn-end waiters keyed by child id, then by target turn. */
   private readonly waiters = new Map<SessionId, Map<number, Array<() => void>>>()
   /**
-   * Turns a `vibe_wait` already delivered INLINE (from the log, or through a
+   * Turns a wait already delivered INLINE (from the log, or through a
    * registered waiter). A later `turn/end` replay for such a turn must not
    * also steer — the inline return was the ack. Keyed `childId\0turn`.
    */
   private readonly deliveredTurns = new Set<string>()
   /**
-   * Consecutive `subagent-settled` claims by the director since the last
+   * Consecutive `subagent-settled` claims by the spawning agent since the last
    * user-authored claim. Bounds the self-exciting wake chain.
    */
   private consecutiveSettles = 0
   /** Whether the registry has been disposed. */
   private disposed = false
 
-  /** Disposes the root listeners (the tools' `agent.ctx` registrations unwind separately). */
+  /** Disposes the root listeners (any consumer-side registrations unwind separately). */
   private readonly disposeListeners: () => void
 
   constructor(
     private readonly ctx: Context,
-    private readonly director: Agent,
+    private readonly spawner: Agent,
     private readonly wakeBudget: number,
-    private readonly rosterSink: (workers: VibeWorkerView[]) => void,
+    private readonly rosterSink: (workers: WorkerView[]) => void,
   ) {
     // The session/event firehose on the ROOT ctx sees every session's events,
     // including the children's. Scope-filtered dispatch would miss them.
@@ -185,11 +185,11 @@ export class WorkerRegistry {
       this.emitRoster()
     })
     // User input resets the wake budget; a settle notice spends it. The
-    // continuation manager's settle notice is the only wake we cannot block
-    // from a plugin, so we bound what the woken director may DO next — and
-    // the self-delivery steer spends the same budget through the same claim.
+    // continuation manager's settle notice is the only wake a plugin cannot
+    // block, so we bound what the woken spawner may DO next — and the
+    // self-delivery steer spends the same budget through the same claim.
     const offClaims = ctx.on('agent/inbox/claimed', ({ agent, message }) => {
-      if (agent !== this.director) return
+      if (agent !== this.spawner) return
       if (message.source.kind === 'user') {
         this.consecutiveSettles = 0
       } else if (message.source.kind === 'subagent-settled') {
@@ -218,7 +218,7 @@ export class WorkerRegistry {
     return this.consecutiveSettles >= this.wakeBudget
   }
 
-  /** Current consecutive settle count (exposed by `vibe_list`). */
+  /** Current consecutive settle count. */
   get consecutiveSettleCount(): number {
     return this.consecutiveSettles
   }
@@ -228,7 +228,7 @@ export class WorkerRegistry {
    * `completed + 1`, read from the child's live log when readable (a fresh
    * child has none → turn 1), else assumed fresh.
    */
-  spawn(childId: SessionId, tier: VibeTier, label: string, initialEvents: readonly SessionEvent[] | undefined): WorkerRecord {
+  spawn(childId: SessionId, tier: WorkerTier, label: string, initialEvents: readonly SessionEvent[] | undefined): WorkerRecord {
     const record: WorkerRecord = {
       childId,
       tier,
@@ -244,7 +244,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * Register one followup dispatch. The next FIFO turn completes after the
+   * Register one follow-up dispatch. The next FIFO turn completes after the
    * previous one; for a worker the registry does not know (cold-resumed),
    * seed from its live log.
    */
@@ -259,7 +259,7 @@ export class WorkerRegistry {
     const record: WorkerRecord = {
       childId,
       tier: 'good',
-      label: 'vibe worker',
+      label: 'worker',
       lastTurn: liveEvents === undefined ? 1 : completedTurnsOf(liveEvents) + 1,
       dispatched: 1,
       state: seedState(liveEvents),
@@ -270,7 +270,7 @@ export class WorkerRegistry {
     return record
   }
 
-  /** Mark one worker parked (vibe_kill interrupt). */
+  /** Mark one worker parked (interrupt). */
   park(childId: SessionId): void {
     const record = this.workers.get(childId)
     if (record === undefined) return
@@ -279,7 +279,7 @@ export class WorkerRegistry {
     this.emitRoster()
   }
 
-  /** Mark every live worker parked (`/vibe off`), leaving dead rows untouched. */
+  /** Mark every live worker parked, leaving dead rows untouched. */
   parkAll(): void {
     let changed = false
     for (const record of this.workers.values()) {
@@ -344,10 +344,10 @@ export class WorkerRegistry {
         finish(turnEndResult(childId, turn, 'timeout', undefined))
       }, options.timeoutMs)
       offTimeout = () => { clearTimeout(timer) }
-      // Exec signal: the director's turn was cancelled or the tool call aborted.
+      // Exec signal: the caller's turn was cancelled or the wait aborted.
       offSignal = () => {
         if (options.signal.aborted) {
-          finish(undefined, new Error(`vibe_wait aborted: ${String(options.signal.reason ?? 'signal')}`))
+          finish(undefined, new Error(`worker wait aborted: ${String(options.signal.reason ?? 'signal')}`))
         }
       }
       options.signal.addEventListener('abort', offSignal)
@@ -355,7 +355,7 @@ export class WorkerRegistry {
       // this fires only on hard destroy / drain).
       offDisposed = this.ctx.on('agent/disposed', ({ agent }) => {
         if (agent.id === childId) {
-          finish(undefined, new Error(`vibe_wait: worker ${childId} was disposed before turn ${turn} ended`))
+          finish(undefined, new Error(`worker ${childId} was disposed before turn ${turn} ended`))
         }
       })
       if (options.signal.aborted) offSignal()
@@ -366,7 +366,7 @@ export class WorkerRegistry {
    * One worker turn ended. Resolve any waiters for exactly this turn — that
    * is the inline ack that CONSUMES the completion (no steer). When nobody
    * waited (or the wait already timed out/aborted/interrupted), self-deliver
-   * the completion to the director by steering it, unless the wake budget is
+   * the completion by steering the spawning agent, unless the wake budget is
    * exhausted (no new self-excitation).
    */
   private onTurnEnd(childId: SessionId, turn: number): void {
@@ -389,17 +389,16 @@ export class WorkerRegistry {
     // A wait already returned this turn inline (from the log): that return
     // was the ack, so a replayed turn/end must not also steer.
     if (this.deliveredTurns.delete(`${childId}\u0000${turn}`)) return
-    // No inline ack: the completion was NOT consumed by a vibe_wait.
+    // No inline ack: the completion was NOT consumed by a wait.
     const events = childSessionEvents(this.ctx, childId)
     this.steerCompletion(childId, turn, this.outputText(events ?? []))
   }
 
   /**
-   * Steer the director with the worker's completion. Gated on the wake
-   * budget: a woken director whose budget is spent must not be woken again —
-   * the completion stays reachable through `vibe_wait` (which resolves from
-   * the child's log) and later settles steer again once a user message
-   * resets the budget.
+   * Steer the spawning agent with the worker's completion. Gated on the wake
+   * budget: a woken agent whose budget is spent must not be woken again — the
+   * completion stays reachable through a wait (which resolves from the child's
+   * log) and later settles steer again once a user message resets the budget.
    */
   private steerCompletion(childId: SessionId, turn: number, output: string | undefined): void {
     if (this.wakeBudgetExhausted()) return
@@ -418,7 +417,7 @@ export class WorkerRegistry {
         senderSessionId: childId,
       },
     })
-    this.director.steer(message)
+    this.spawner.steer(message)
   }
 
   /** Resolve every waiter for one completed turn. */
@@ -457,9 +456,8 @@ export class WorkerRegistry {
   }
 
   /**
-   * Publish the current roster to the plugin-owned store (the `vibeWorkers`
-   * projection reads it). Replaces the old `vibe/workers` session-event
-   * mirror: the roster is plugin state, never a session event.
+   * Publish the current roster to the consumer's roster sink (the wire value a
+   * projection or UI reads). The roster is plugin state, never a session event.
    */
   private emitRoster(): void {
     if (this.disposed) return
@@ -467,12 +465,12 @@ export class WorkerRegistry {
   }
 
   /**
-   * Seed the in-memory roster from a persisted snapshot (a `/vibe restore` or
-   * resume after restart). Resumed workers are normalized to `parked`: a
-   * restart interrupted every open turn, and the live state re-derives from
+   * Seed the in-memory roster from a persisted snapshot (resume after
+   * restart). Resumed workers are normalized to `parked`: a restart
+   * interrupted every open turn, and the live state re-derives from
    * `session/event` as work flows.
    */
-  seed(workers: VibeWorkerView[]): void {
+  seed(workers: WorkerView[]): void {
     for (const worker of workers) {
       const childId = worker.id as SessionId
       if (this.workers.has(childId)) continue
@@ -489,7 +487,7 @@ export class WorkerRegistry {
   }
 
   /** The wire rows of the current roster, in spawn order. */
-  private workersView(): VibeWorkerView[] {
+  private workersView(): WorkerView[] {
     return [...this.workers.values()].map(record => ({
       id: record.childId,
       name: record.label,
@@ -500,7 +498,7 @@ export class WorkerRegistry {
     }))
   }
 
-  /** Dispose the registry: emit the final roster (mode exit), then reject nothing further (no waits can arrive). */
+  /** Dispose the registry: emit the final roster, then stop observing (no waits can arrive). */
   dispose(): void {
     if (this.disposed) return
     this.emitRoster()
@@ -515,13 +513,14 @@ export class WorkerRegistry {
 /**
  * Read the child's live session events for output extraction. Prefers the
  * live agent's session; falls back to the session store when mounted.
+ *
+ * `Session.events` was removed in dsh 0.2.0-rc.2, so both reads go through
+ * `snapshotEvents()`.
  */
 export function childSessionEvents(ctx: Context, childId: SessionId): readonly SessionEvent[] | undefined {
   const agent = ctx.get('agents')?.get(childId)
-  if (agent !== undefined) return agent.session.events
+  if (agent !== undefined) return agent.session.snapshotEvents()
   const sessions = ctx.get('sessions')
   const session = sessions?.get(childId)
-  return session?.events
+  return session?.snapshotEvents()
 }
-
-

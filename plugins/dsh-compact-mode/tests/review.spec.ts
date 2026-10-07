@@ -25,7 +25,7 @@ describe('compact review lifecycle', () => {
     }
 
     await engine.compactNow(agent, new AbortController().signal)
-    const events = agent.session.events
+    const events = agent.session.snapshotEvents()
 
     const start = events.find(e => e.type === 'compaction/start')
     expect(start).toBeDefined()
@@ -36,7 +36,7 @@ describe('compact review lifecycle', () => {
     await new Promise(r => setTimeout(r, 30))
 
     const result = await engine.reviews.apply(agent, undefined, new AbortController().signal)
-    const after = agent.session.events
+    const after = agent.session.snapshotEvents()
     const summary = after.find(e => e.type === 'compaction/summary')
     const replace = after.find(e => e.type === 'user/message' && e.surfaceOp !== undefined && e.surfaceOp !== 'append')
     const end = after.find(e => e.type === 'compaction/end')
@@ -64,7 +64,7 @@ describe('compact review lifecycle', () => {
 
     await engine.compactNow(agent, new AbortController().signal)
     await engine.reviews.abort(agent, 'user cancelled')
-    const after = agent.session.events
+    const after = agent.session.snapshotEvents()
     const end = after.find(e => e.type === 'compaction/end')
     expect(end).toBeDefined()
     expect(end!.data.error).toBe('user cancelled')

@@ -1,21 +1,19 @@
 /**
- * Package-owned runtime invariants for dsh-channel-wechat.
+ * Package-owned config checks for dsh-channel-wechat.
  *
- * Companion plugin loaded beside `@deepseek-ai/dsh-invariants` (dsh package
- * convention: each package registers its checks from a `./invariant`
- * companion; ordinary entrypoints stay independent). The checks are the
- * plugin's configuration invariants — strict keys, policy enums, token
- * shape, and deployment preconditions — so a typo'd config fails loudly at
- * load time instead of mid-poll with confusing protocol errors.
+ * The checks are the plugin's configuration invariants — strict keys, policy
+ * enums, token shape, and deployment preconditions — so a typo'd config fails
+ * loudly at load time instead of mid-poll with confusing protocol errors.
  *
- * The same pure validators are also called directly from the main plugin's
- * `apply`, so misconfiguration fails fast even when the companion is not
- * mounted.
+ * These validators are pure (they report through a caller-supplied `fail`
+ * callback) and are called directly from the main plugin's `apply`. The
+ * `apply` exported here is the standalone loud-fail entry: it runs the same
+ * checks and throws, instead of registering with the retired runtime invariant
+ * registry (removed upstream in 0.2.1).
  * @module @dsh-plugin/dsh-channel-wechat/invariant
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { InvariantFailure } from '@deepseek-ai/dsh-invariants'
 import type { Config } from './config.ts'
 import { assertStrictConfigKeys, resolveStateDir } from './config.ts'
 import { DM_POLICIES, GROUP_POLICIES } from './invariant-values.ts'
@@ -23,25 +21,19 @@ import { DM_POLICIES, GROUP_POLICIES } from './invariant-values.ts'
 /** Cordis companion plugin name. */
 export const name = 'dsh-channel-wechat-invariant'
 
-/** Service required before the companion can reserve package ownership. */
-export const inject = ['invariants']
-
-/** Companion entry: validates the same config block the main plugin loads. */
-export function apply(ctx: Context, config: Record<string, unknown>): () => void {
-  return ctx.invariants.register(
-    '@dsh-plugin/dsh-channel-wechat',
-    (invariantCtx: Context, fail: InvariantFailure) => {
-      validateConfig(config, fail)
-    },
-  )
+/** Standalone entry: validates the same config block the main plugin loads, throwing on any violation. */
+export function apply(_ctx: Context, config: Record<string, unknown>): void {
+  validateConfig(config, (message) => {
+    throw new Error(`dsh-channel-wechat: ${message}`)
+  })
 }
 
 /**
  * Validate a raw (pre-schema) config object against plugin invariants.
  * @param config - raw config object as written by the user.
- * @param fail - invariant failure reporter bound to this package.
+ * @param fail - failure reporter bound to this package.
  */
-export function validateConfig(config: Record<string, unknown>, fail: InvariantFailure): void {
+export function validateConfig(config: Record<string, unknown>, fail: (message: string) => void): void {
   try {
     assertStrictConfigKeys(config)
   } catch (error) {

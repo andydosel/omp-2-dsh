@@ -8,8 +8,8 @@
  * @module @dsh-plugin/dsh-compact-mode/config
  */
 
-import { deepFreeze } from '@deepseek-ai/dsh-llm'
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
+import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import z from '@deepseek-ai/schemastery'
 
 /** Default request-pressure fraction that prompts entering compact mode. */
@@ -74,9 +74,10 @@ export interface CompactModeConfig {
   /** Review-tree persistence route: `'domain'` (preferred) or `'file'` (plugin-owned JSON). Defaults to `'domain'`. */
   reviewTree: 'domain' | 'file'
   /**
-   * Reserved for vibe-mode interop (listed in the design §2.9 as a vibe
-   * placeholder). Accepted for profile compatibility; compact-mode does not
-   * use it.
+   * Accepted for profile compatibility only; compact-mode does not use it.
+   * Released profile overlays (and profile configs already installed under
+   * `~/.dsh/dsh-suite/`) carry this key, and unknown keys are rejected at
+   * load, so the field must stay accepted even though it is inert.
    */
   readOnlyTools: string[]
 }

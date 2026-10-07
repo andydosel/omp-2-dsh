@@ -48,9 +48,13 @@ export class MockTokenMeter {
   perNodeTokens = 4000
 
   measure(session: Session) {
-    const nodes = session.surface.nodes.map(seq => ({ seq, tokens: this.perNodeTokens }))
+    const nodes = session.surface.nodes.map(seq => ({
+      seq,
+      tokens: this.perNodeTokens,
+      heuristicTokens: this.perNodeTokens,
+    }))
     return {
-      logRevision: session.events.length,
+      logRevision: session.seq,
       baseline: { kind: 'estimated' as const, tokens: 0 },
       surfaceDeltaTokens: 0,
       totalTokens: this.totalTokens,

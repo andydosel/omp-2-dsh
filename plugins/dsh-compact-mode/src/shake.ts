@@ -7,7 +7,7 @@
  *    service is loaded) — its replacements carry their own `compaction/prune`
  *    shadow-price events.
  * 2. Large fenced/XML blocks in user/tool messages → `ctx.spillStore.saveText`
- *    (when present; otherwise a pure truncation marker) with a `CallId()`
+ *    (when present; otherwise a pure truncation marker) with a `ToolCallId()`
  *    synthesized source, landed as a `user/message` surface replace preceded
  *    by the shared `compaction/prune` shadow-price event.
  * 3. A protected recent tail (`keepRecentTokens`) and a minimum-savings ratio
@@ -22,8 +22,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { TokenMeasurement } from '@deepseek-ai/dsh-token-meter'
 import type { ResolvedConfig } from './config.ts'
 import { inspectCompactionEntryState } from './reuse.ts'
@@ -82,7 +82,11 @@ function findLargeBlock(text: string): { start: number; end: number } | null {
   return null
 }
 
-/** Extract plain text from a message's content blocks for block scanning. */
+/**
+ * Extract plain text from a message's content blocks for block scanning. A
+ * `tool/result` event's message now carries its result blocks directly
+ * (`role: 'tool'`); the removed `tool-result` wrapper block has no successor.
+ */
 function textOfMessage(event: SessionEvent<'user/message' | 'tool/result'>): string {
   const message = event.type === 'user/message' ? event.data : event.data.message
   return (message?.content ?? [])
@@ -91,8 +95,6 @@ function textOfMessage(event: SessionEvent<'user/message' | 'tool/result'>): str
         case 'text':
         case 'reasoning':
           return block.text
-        case 'tool-result':
-          return typeof block.content === 'string' ? block.content : ''
         default:
           return ''
       }
@@ -131,11 +133,11 @@ async function placeholdLargeBlocks(
     if (accumulated >= config.keepRecentTokens) break
   }
 
-  const candidates: { seq: number; event: SessionEvent<'user/message' | 'tool/result'>; tokens: number }[] = []
+  const candidates: { seq: SessionSeq; event: SessionEvent<'user/message' | 'tool/result'>; tokens: number }[] = []
   for (let index = 0; index < keepFromIdx; index += 1) {
     // oxlint-disable-next-line typescript/no-non-null-assertion -- index in range
     const seq = surfaceNodes[index]!
-    const event = session.events[seq]
+    const event = session.eventAt(seq)
     if (event === undefined || event.seq !== seq) {
       throw new Error(`compact-mode shake: surface seq ${seq} has no matching session event`)
     }
@@ -171,8 +173,9 @@ async function placeholdLargeBlocks(
         const ref = await spillStore.saveText({
           owner: { sessionId: session.id },
           source: {
+            kind: 'tool',
             toolName: 'compact-shake',
-            callId: CallId(`shake-${session.id}-${seq}`),
+            callId: ToolCallId(`shake-${session.id}-${seq}`),
             label: 'fenced-block',
           },
           suggestedName: `shake-${seq}.txt`,
@@ -195,9 +198,9 @@ async function placeholdLargeBlocks(
     })
     session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: placeholder }],
-      source: { kind: 'plugin', plugin: 'dsh-compact-mode', form: 'recall' },
+      source: { kind: 'dsh-compact-mode', form: 'recall' },
     }), {
-      surfaceOp: { op: 'replace', start: seq, end: seq },
+      surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq },
       sourceEventSeqs: [seq],
     })
     landed += 1
@@ -222,7 +225,7 @@ export async function shakeSession(
 ): Promise<ShakeResult> {
   // The shake must not run while a compaction transaction is open: replacing
   // nodes mid-transaction would invalidate the selected span.
-  const entry = inspectCompactionEntryState(session.events)
+  const entry = inspectCompactionEntryState(session.snapshotEvents())
   if (entry.unmatchedCompactionStart !== undefined) {
     return { landed: false, placeholders: 0, measurement: ctx.tokenMeter.measure(session), savedTokens: 0 }
   }

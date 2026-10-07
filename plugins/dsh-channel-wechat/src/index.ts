@@ -40,7 +40,7 @@ export const inject = ['agents', 'sessions']
 /** Wire the WeChat channel: poll loop via ctx.effect + `/wechat` command. */
 export function apply(ctx: Context, config: import('./config.ts').Config): void {
   // Loud config validation: strict keys, policy enums, numeric ranges,
-  // token shape. Runs even without the dsh-invariants companion mounted.
+  // token shape (the same pure checks the standalone invariant entry runs).
   validateConfig(config as unknown as Record<string, unknown>, (message) => {
     throw new Error(`dsh-channel-wechat: ${message}`)
   })
@@ -158,8 +158,8 @@ function tryDeployableConfig(
     return true
   } catch (error) {
     // The harness keeps running with the channel disabled, exactly like
-    // hermes `connect()` returning False with a warning. The dsh-invariants
-    // companion mounts the loud-fail variant.
+    // hermes `connect()` returning False with a warning. The standalone
+    // checks in `./invariant.ts` are the loud-fail variant.
     console.error(`[dsh-channel-wechat] startup skipped: ${(error as Error).message}`)
     return false
   }

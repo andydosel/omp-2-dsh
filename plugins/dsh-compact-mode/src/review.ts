@@ -33,7 +33,7 @@ import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import { CompactionId, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult } from '@deepseek-ai/dsh-compaction'
 import type { ContentBlock, TokenUsage, UserMessage } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ResolvedConfig } from './config.ts'
 import type { CompactModeController } from './mode.ts'
 import {
@@ -60,11 +60,11 @@ export interface ReviewState {
   readonly agent: Agent
   readonly compactionId: CompactionId
   /** Seq of the owner-null `compaction/start` that holds the review lock. */
-  readonly startSeq: number
+  readonly startSeq: SessionSeq
   /** The shadowed surface span selected at entry (surface positions). */
-  readonly shadowedRange: { start: number; end: number }
+  readonly shadowedRange: { start: SessionSeq; end: SessionSeq }
   /** The shadowed surface-node seqs, in surface order. */
-  readonly shadowedSeqs: number[]
+  readonly shadowedSeqs: SessionSeq[]
   /** Estimated token count of the shadowed content. */
   readonly shadowedTokenCount: number
   /** The review tree handle (instruction/draft nodes). */
@@ -81,19 +81,14 @@ export interface ReviewState {
   nodeSeq: number
 }
 
-/** Extract claimed user-message text from content blocks. */
+/**
+ * Extract claimed user-message text from content blocks. Tool results are no
+ * longer wrapped in a `tool-result` content block (and never appear as
+ * user-role messages), so only text contributes.
+ */
 function claimedText(message: UserMessage): string {
   return message.content
-    .map((block) => {
-      switch (block.type) {
-        case 'text':
-          return block.text
-        case 'tool-result':
-          return typeof block.content === 'string' ? block.content : ''
-        default:
-          return ''
-      }
-    })
+    .map(block => block.type === 'text' ? block.text : '')
     .filter(text => text.length > 0)
     .join('\n')
 }
@@ -138,7 +133,7 @@ export class ReviewCoordinator {
     }
     signal?.throwIfAborted()
     // Command state only: the owner-null lock requires no open turn.
-    const entry = inspectCompactionEntryState(session.events)
+    const entry = inspectCompactionEntryState(session.snapshotEvents())
     if (entry.openTurn !== null) {
       throw new ManualCompactionError('busy', 'compact mode requires command state; wait for the current turn to finish')
     }
@@ -353,7 +348,7 @@ export class ReviewCoordinator {
       throw new ManualCompactionError('changed', 'the compacted span changed during review')
     }
 
-    const startEvent = session.events[state.startSeq] as SessionEvent<'compaction/start'> | undefined
+    const startEvent = session.eventAt(state.startSeq)
     if (startEvent === undefined || startEvent.type !== 'compaction/start') {
       throw new ManualCompactionError('changed', 'the review lock marker is no longer in the log')
     }

@@ -40,7 +40,7 @@ describe('CompactModeController.set', () => {
       return decision
     })
     void boundaryCommitted
-    agent.session.append('turn/end', { turn: 1, reason: 'done' })
+    agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     expect(controller.get(agent).active).toBe(false)
   })
 })

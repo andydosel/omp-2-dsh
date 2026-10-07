@@ -18,8 +18,12 @@ import { boundContextSummary, createUserMessage, type UserMessage } from '@deeps
 import type { Severity } from './severity.ts'
 import { isInterrupting } from './severity.ts'
 
-/** The plugin's message-source identity in the primary session. */
-export const ADVISOR_PLUGIN = 'advisor'
+/**
+ * The plugin's own message-source kind in the primary session. Declared in
+ * `@deepseek-ai/dsh-llm`'s `MessageSourceMap` (see `src/index.ts`); the old
+ * shared `{ kind: 'plugin', plugin }` vocabulary is gone.
+ */
+export const ADVISOR_SOURCE_KIND = 'dsh-advisor'
 
 /** Escape one XML text/value character. */
 function escapeXml(value: string): string {
@@ -54,7 +58,7 @@ export function advisoryMessage(note: string, severity: Severity): UserMessage {
   const summary = boundContextSummary(`advisor (${severity}): ${note.replace(/\s+/g, ' ').trim()}`)
   return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: ADVISOR_PLUGIN, form: 'notice', summary },
+    source: { kind: ADVISOR_SOURCE_KIND, form: 'notice', summary },
   })
 }
 
@@ -245,6 +249,17 @@ export class DeliveryController {
   }
 }
 
+/**
+ * Whether an agent's inbox still holds accepted work. `Inbox.hasPending` was
+ * removed from the public interface; this is the inlined upstream predicate
+ * (`nextTurn` or `nextStep` non-empty).
+ * @param agent - the agent whose inbox to read.
+ * @returns whether either inbox destination is non-empty.
+ */
+export function inboxHasPending(agent: Agent): boolean {
+  return agent.inbox.nextTurn.length > 0 || agent.inbox.nextStep.length > 0
+}
+
 /** Primary state read off a live agent. */
 export function readPrimaryState(
   primary: Agent,
@@ -253,7 +268,7 @@ export function readPrimaryState(
 ): PrimaryState {
   return {
     running: primary.status === 'running',
-    hasQueuedWork: primary.inbox.hasPending,
+    hasQueuedWork: inboxHasPending(primary),
     lastTurnTerminal: terminal,
     atTurnStopping,
   }

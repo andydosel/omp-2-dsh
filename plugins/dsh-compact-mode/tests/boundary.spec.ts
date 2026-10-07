@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CompactionId } from '@deepseek-ai/dsh-compaction'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { CompactModeEngine } from '../src/engine.ts'
 
@@ -250,7 +251,7 @@ describe('review queue: late instructions and crash windows', () => {
     // The review survives the failures: mode on, lock open, still active.
     expect(engine.reviews.isActive(agent)).toBe(true)
     expect(engine.mode.get(agent).active).toBe(true)
-    expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/end')).toBe(false)
   })
 })
 
@@ -266,23 +267,23 @@ describe('span changes during review', () => {
     // A user/message lands INSIDE the reviewed span: replace its middle node
     // with a fresh surface node (e.g. an injected notice while reviewing).
     const middle = state.shadowedSeqs[1]!
-    const lengthBeforeInjection = agent.session.events.length
+    const lengthBeforeInjection = agent.session.snapshotEvents().length
     agent.session.append('user/message', {
       role: 'user',
       id: 'mid',
       content: [{ type: 'text', text: 'injected inside the span' }],
       source: { kind: 'user' },
-    }, { surfaceOp: { op: 'replace', start: middle, end: middle }, sourceEventSeqs: [middle] })
-    const lengthAfterInjection = agent.session.events.length
+    }, { surfaceOp: { op: 'replace', startSeq: middle, endSeq: middle }, sourceEventSeqs: [middle] })
+    const lengthAfterInjection = agent.session.snapshotEvents().length
     expect(lengthAfterInjection).toBe(lengthBeforeInjection + 1)
 
     await expect(engine.reviews.apply(agent, undefined, new AbortController().signal))
       .rejects.toMatchObject({ name: 'ManualCompactionError', code: 'changed' })
 
     // apply appended NOTHING: the span guard fires before any commit event.
-    expect(agent.session.events).toHaveLength(lengthAfterInjection)
-    expect(agent.session.events.some(e => e.type === 'compaction/summary')).toBe(false)
-    expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
+    expect(agent.session.snapshotEvents()).toHaveLength(lengthAfterInjection)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/summary')).toBe(false)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/end')).toBe(false)
     // Lock still open, mode still active, review state intact.
     expect(engine.mode.get(agent).active).toBe(true)
     expect(engine.reviews.isActive(agent)).toBe(true)
@@ -301,14 +302,14 @@ describe('span changes during review', () => {
     // the seq the review lock was entered under now holds a user/message.
     // Append-only logs make this unreachable in-process; the guard is the
     // defense-in-depth revalidation.
-    Object.assign(state, { startSeq: 0 })
-    const lengthBefore = agent.session.events.length
+    Object.assign(state, { startSeq: SessionSeq(0) })
+    const lengthBefore = agent.session.snapshotEvents().length
 
     await expect(engine.reviews.apply(agent, undefined, new AbortController().signal))
       .rejects.toMatchObject({ name: 'ManualCompactionError', code: 'changed' })
 
-    expect(agent.session.events).toHaveLength(lengthBefore)
-    expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
+    expect(agent.session.snapshotEvents()).toHaveLength(lengthBefore)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/end')).toBe(false)
     expect(engine.mode.get(agent).active).toBe(true)
     expect(engine.reviews.isActive(agent)).toBe(true)
   })
@@ -332,7 +333,7 @@ describe('lock conflicts', () => {
     await expect(engine.reviews.enter(agent))
       .rejects.toMatchObject({ name: 'ManualCompactionError', code: 'busy' })
     expect(engine.reviews.isActive(agent)).toBe(false)
-    expect(agent.session.events.some(e => e.type === 'compaction/start')).toBe(false)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/start')).toBe(false)
   })
 
   it('compactRegion rejects with busy during an active review (engine-level guard)', async () => {
@@ -343,15 +344,15 @@ describe('lock conflicts', () => {
     // The ENGINE rejects before any coordinator/surface work: the review
     // holds the durable lock. (The port's own assertNoActiveCompaction
     // recheck is a second layer; this message proves the engine fired first.)
-    await expect(engine.compactRegion(0, 2, agent, new AbortController().signal))
+    await expect(engine.compactRegion(SessionSeq(0), SessionSeq(2), agent, new AbortController().signal))
       .rejects.toMatchObject({
         name: 'ManualCompactionError',
         code: 'busy',
         message: 'compact review is active; abort or apply before region compaction',
       })
     expect(engine.reviews.isActive(agent)).toBe(true)
-    expect(agent.session.events.some(e => e.type === 'compaction/summary')).toBe(false)
-    expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/summary')).toBe(false)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/end')).toBe(false)
   })
 
   it('a second enter on the same session rejects with busy', async () => {
@@ -367,7 +368,7 @@ describe('lock conflicts', () => {
       })
     expect(engine.reviews.isActive(agent)).toBe(true)
     // Exactly one durable lock exists.
-    expect(agent.session.events.filter(e => e.type === 'compaction/start')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(e => e.type === 'compaction/start')).toHaveLength(1)
   })
 })
 
@@ -383,17 +384,17 @@ describe('apply rollback', () => {
     // Force the framed checkpoint to price above the shadowed content so the
     // shrink revalidation fails (mock meter default: estimateMessage = 1000).
     tokenMeter.estimateMessage = () => 100_000
-    const lengthBefore = agent.session.events.length
+    const lengthBefore = agent.session.snapshotEvents().length
 
     await expect(engine.reviews.apply(agent, undefined, new AbortController().signal))
       .rejects.toMatchObject({ name: 'ManualCompactionError', code: 'summary' })
 
     // Zero surface mutation: no summary, no checkpoint replace, no end.
-    expect(agent.session.events).toHaveLength(lengthBefore)
-    expect(agent.session.events.some(e => e.type === 'compaction/summary')).toBe(false)
-    expect(agent.session.events.some(e => e.type === 'user/message'
+    expect(agent.session.snapshotEvents()).toHaveLength(lengthBefore)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/summary')).toBe(false)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'user/message'
       && typeof e.surfaceOp === 'object')).toBe(false)
-    expect(agent.session.events.some(e => e.type === 'compaction/end')).toBe(false)
+    expect(agent.session.snapshotEvents().some(e => e.type === 'compaction/end')).toBe(false)
     // Lock open, mode active, review retained with its tree.
     expect(engine.mode.get(agent).active).toBe(true)
     expect(engine.reviews.isActive(agent)).toBe(true)
@@ -417,7 +418,7 @@ describe('apply rollback', () => {
     // durability checkpoint, and the mode is exited; the flush failure then
     // throws, so the tree and the review state are retained — cleanup runs
     // after the flush.
-    const events = agent.session.events
+    const events = agent.session.snapshotEvents()
     const summaryIdx = events.findIndex(e => e.type === 'compaction/summary')
     const replaceIdx = events.findIndex(e => e.type === 'user/message' && typeof e.surfaceOp === 'object')
     const endIdx = events.findIndex(e => e.type === 'compaction/end')
@@ -447,7 +448,7 @@ describe('apply success and abort lifecycle', () => {
     await waitFor(() => { expect(state.processing).toBe(false) })
 
     const result = await engine.reviews.apply(agent, undefined, new AbortController().signal)
-    const events = agent.session.events
+    const events = agent.session.snapshotEvents()
     const summaryIdx = events.findIndex(e => e.type === 'compaction/summary')
     const replaceIdx = events.findIndex(e => e.type === 'user/message' && typeof e.surfaceOp === 'object')
     const endIdx = events.findIndex(e => e.type === 'compaction/end')
@@ -458,14 +459,13 @@ describe('apply success and abort lifecycle', () => {
     expect(replaceIdx).toBeGreaterThan(summaryIdx)
     expect(endIdx).toBeGreaterThan(replaceIdx)
     expect(replaceEvent!.data.source).toMatchObject({
-      kind: 'plugin',
-      plugin: 'compact',
+      kind: 'compact-checkpoint',
       compactionId: result.compactionId,
     })
     expect(replaceEvent!.surfaceOp).toEqual({
       op: 'replace',
-      start: state.shadowedRange.start,
-      end: state.shadowedRange.end,
+      startSeq: state.shadowedRange.start,
+      endSeq: state.shadowedRange.end,
     })
     expect(events[endIdx]!.data.error).toBeUndefined()
 
@@ -485,7 +485,7 @@ describe('apply success and abort lifecycle', () => {
     await waitFor(() => { expect(state.processing).toBe(false) })
 
     await engine.reviews.abort(agent, 'user cancelled')
-    const events = agent.session.events
+    const events = agent.session.snapshotEvents()
     const end = events.find(e => e.type === 'compaction/end')
     expect(end!.data.error).toBe('user cancelled')
     expect(end!.data.turn).toBeNull()
@@ -518,7 +518,7 @@ describe('apply success and abort lifecycle', () => {
     await waitFor(() => { expect(engine.reviews.require(agent).processing).toBe(false) })
 
     const claimedText = 'remember the exact file path: src/engine.ts'
-    const logStart = agent.session.events.length
+    const logStart = agent.session.snapshotEvents().length
     // The driver opens the turn, proposes the step, and closes it blocked;
     // the plugin must not append anything itself.
     agent.session.append('turn/start', { turn: 7 })
@@ -531,7 +531,7 @@ describe('apply success and abort lifecycle', () => {
     agent.session.append('turn/end', { turn: 7, reason: { kind: 'blocked' } })
 
     // No step/start, no user/message append: only the driver's turn bracket.
-    expect(agent.session.events.slice(logStart).map(e => e.type)).toEqual(['turn/start', 'turn/end'])
+    expect(agent.session.snapshotEvents().slice(logStart).map(e => e.type)).toEqual(['turn/start', 'turn/end'])
 
     // The captured instruction text matches the claimed message content.
     await waitFor(() => {

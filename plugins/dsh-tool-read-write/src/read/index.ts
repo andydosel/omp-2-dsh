@@ -17,7 +17,8 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import type { JsonValue, SessionStore } from '@deepseek-ai/dsh-session'
+import type { SessionStore } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parseSelectors } from './selectors.ts'
 import type { ParsedSelectors } from './selectors.ts'
 import type { LineSelector } from './selectors.ts'
@@ -481,7 +482,7 @@ async function readAgentValue(ctx: Context, caps: ReadToolCaps, rawPath: string,
   const selector = reapplyRaw(parsed.selector, rawTail)
   const request = windowRequestFromSelector(selector, caps)
   const window = await buildWindow([transcript.text], request)
-  const lastReal = [...session.events].reverse().find(event => event.type !== 'session/end-seed')
+  const lastReal = session.snapshotEvents().findLast(event => event.type !== 'session/end-seed')
   return {
     path: `${AGENT_SCHEME}${session.id}`,
     kind: 'agent',

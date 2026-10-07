@@ -25,7 +25,7 @@ describe('renderAdvisory', () => {
   it('builds a plugin-sourced notice message with a bounded summary', () => {
     const message = advisoryMessage('The retry loop may never terminate', 'blocker')
     expect(message.role).toBe('user')
-    expect(message.source).toMatchObject({ kind: 'plugin', plugin: 'advisor', form: 'notice' })
+    expect(message.source).toMatchObject({ kind: 'dsh-advisor', form: 'notice' })
     expect(message.source).toHaveProperty('summary')
   })
 })
