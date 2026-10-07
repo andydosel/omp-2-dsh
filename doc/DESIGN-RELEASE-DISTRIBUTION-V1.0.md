@@ -1,7 +1,8 @@
 # dsh 插件套件 GitHub Release 分发方案设计（V1.0）
 
-> 目标：让 `@dsh-plugin/*` 这套插件（tree-engine / compact-mode / vibe-mode /
-> tool-read-write / advisor / channel-wechat / mode-ui）通过 **GitHub Release
+> 目标：让 `@dsh-plugin/*` 这套插件（tree-engine / compact-mode / tool-read-write /
+> advisor / channel-wechat / mode-ui / review-gate / question-board / task-board /
+> rules / orchestrator / peers / org，外加共享库 dsh-worker-spawn）通过 **GitHub Release
 > 预构建 zip** 分发给外部用户，消费者**零 build、零 registry、零 token**，
 > 用最少的步骤下载、安装、每日启动。
 > 范围：设计方案 + 配套脚本（`plugin/release.ps1` / `setup.ps1` / `start.ps1`）
@@ -33,7 +34,7 @@
    需 `publishConfig.access:"public"`。Release 路径**无 registry / scope / auth**，
    版本直接绑 `tag = v<version>`，天然免这些前置。
 5. **可选的 CI 自动化**：`plugin/.github/workflows/release.yml` 骨架，打 tag
-   `v*` → 构建 7 插件 → `gh release create` 上传 `dsh-suite-<version>.zip`。
+   `v*` → 构建 14 包 → `gh release create` 上传 `dsh-suite-<version>.zip`。
    骨架，未在 CI 实测（见 §6 待验证项）。
 
 ---
@@ -46,7 +47,7 @@
   `plugin/profile-main/cordis.patch.yml` 的 `insert` 行）。loader 从 profile 目录
   按包名 `import()` 已构建 ESM `lib/index.js`（`tree.ts:155`；包 `type: module`、
   `main: lib/index.js`，见 `doc/PLUGIN_DEV_PLAYBOOK.md:191`）。
-- 客户端面：`dsh-mode-ui` / `dsh-vibe-mode` 声明 `dsh.client` +
+- 客户端面：`dsh-mode-ui` 声明 `dsh.client` +
   `exports["./client"]`，client-modules 按包名从 profile 目录
   `createRequire(ctx.baseUrl)` 解析并哈希 `lib/client.js`
   （`packages/client/modules/src/index.ts:212,332,394`）；**缺 bundle 抛
@@ -67,12 +68,12 @@
 | 阻塞项 | 说明 |
 |---|---|
 | **scope 归属** | `@dsh-plugin` scope 需要存在同名 npm 用户/组织，且发布者是其成员/拥有者（`docs.npmjs.com scope` 规定）。当前无人占用但**无法匿名确认归属**。 |
-| **`private:true`** | 除 vibe-mode 外其余 7 包都 `private:true`，直接 `pnpm publish` 被拒。 |
+| **`private:true`** | 全部 14 包都 `private:true`，直接 `pnpm publish` 被拒。 |
 | **`workspace:*`** | `dsh-compact-mode` 依赖 `tree-engine: workspace:*`（`package.json:56`），外部消费者无法解析，须改成 `^0.1.0`。 |
-| **`-rc.x` 不占 `latest`** | compact/vibe/advisor 是 `0.1.0-rc.x`，裸 `add` 装不到，要 bump 稳定版。 |
+| **`-rc.x` 不占 `latest`** | compact-mode/advisor/org/peers/rules 是 `0.1.0-rc.x`，裸 `add` 装不到，要 bump 稳定版。 |
 | **发布不自动构建** | 只有 `build` 无 `prepack`，`pnpm publish` 不会先跑 build。 |
 | **scoped 默认私有** | 需 `publishConfig.access:"public"`。 |
-| **client 依赖声明不全** | mode-ui/vibe-mode 的 `dsh.client.inject` 依赖只在 `devDependencies`。 |
+| **client 依赖声明不全** | mode-ui 的 `dsh.client.inject` 依赖只在 `devDependencies`。 |
 
 这些都要改每个包的 `package.json`（任务约束：不改插件 `package.json`/源码），
 且要 npm 账户/组织/token。**GitHub Release 完全绕开这一切。**
@@ -109,12 +110,19 @@ dsh-suite-<version>/
 │       └── agent.cordis.yml
 └── @dsh-plugin/                     # 直接映射 → ~/.dsh/profiles/web/node_modules/@dsh-plugin/
     ├── tree-engine/                 {package.json, lib/**}
+    ├── dsh-worker-spawn/            {package.json, lib/**}   # 纯库（无插件入口）
     ├── dsh-compact-mode/            {package.json, lib/**}
-    ├── dsh-vibe-mode/               {package.json, lib/**, lib/client.js + lib/client/**}   # 客户面
     ├── dsh-tool-read-write/         {package.json, lib/**}
     ├── dsh-advisor/                 {package.json, lib/**}
     ├── dsh-channel-wechat/          {package.json, lib/**}
-    └── dsh-mode-ui/                 {package.json, lib/**, lib/client.js + lib/client/**}   # 客户面
+    ├── dsh-mode-ui/                 {package.json, lib/**, lib/client.js + lib/client/**}   # 唯一客户面
+    ├── dsh-review-gate/             {package.json, lib/**}
+    ├── dsh-question-board/          {package.json, lib/**}
+    ├── dsh-task-board/              {package.json, lib/**}
+    ├── dsh-rules/                   {package.json, lib/**}
+    ├── dsh-orchestrator/            {package.json, lib/**}
+    ├── dsh-peers/                   {package.json, lib/**}
+    └── dsh-org/                     {package.json, lib/**}
 ```
 
 要点：
@@ -162,10 +170,10 @@ dsh-suite-<version>/
 2. 把 `agent-presets/standard-rw` → `~/.dsh/.agent-presets/standard-rw`。
 3. 把 `cordis.patch.yml` → `~/.dsh/dsh-suite/cordis.patch.yml`（给 start.ps1 一个
    稳定的 `--patch` 路径）。
-4. 校验每个插件的 `package.json` **解析出的宿主入口**存在，且两个客户面插件
-   （vibe-mode / mode-ui）的 `lib/client.js` 存在。校验用的是包 `exports["."]
-   / main` 解析出的真实入口（vibe-mode 是 `lib/types/index.js`，mode-ui 是
-   `lib/src/index.js`，不是扁平 `lib/index.js`）。
+4. 校验每个插件的 `package.json` **解析出的宿主入口**存在，且唯一客户面插件
+   （mode-ui）的 `lib/client.js` 存在。校验用的是包 `exports["."]
+   / main` 解析出的真实入口（mode-ui 是 `lib/src/index.js`，不是扁平
+   `lib/index.js`）。
 
 > `setup.ps1` 默认目标 `$HOME\.dsh`，可用 `-DshHome <path>` 覆盖（供测试/多
 > profile）。它**不会**初始化 web profile —— `dsh web` 首次启动时自动
@@ -259,12 +267,7 @@ jobs:
       - uses: pnpm/action-setup@v4  (version: 10)
       - uses: actions/setup-node@v4 (node-version: 24, cache: pnpm)
       - name: Install
-        run: |
-          cd plugin
-          pnpm install --frozen-lockfile
-          foreach ($p in @('dsh-tool-read-write','dsh-advisor','dsh-channel-wechat','dsh-mode-ui')) {
-            Push-Location $p; pnpm install --frozen-lockfile; Pop-Location
-          }
+        run: pnpm install --frozen-lockfile
       - name: Build and package
         run: |
           $ver = "${{ github.ref_name }}"; if ($ver.StartsWith('v')) { $ver = $ver.Substring(1) }
@@ -278,10 +281,9 @@ jobs:
 
 - 仓库是 dsh-plugin 根；workflow 位于 `plugin/` 下（若移至根 `.github/` 需改
   checkout/`release.ps1` 路径）。
-- **安装拓扑**：根 workspace（`plugin/pnpm-workspace.yaml`）只管理
-  tree-engine / compact-mode / vibe-mode；tool-read-write / advisor /
-  channel-wechat / mode-ui 各自带独立 install。上面 Install 步骤因此「根装一次
-  + 4 个独立包各装一次」。仓库收敛成单一 workspace 可简化该步。
+- **安装拓扑**：单一根 workspace（`pnpm-workspace.yaml` 的 `packages: plugins/*`）
+  管理全部 14 个包，`pnpm install` 一次即可；不再有「根装一次 + 独立包各装一次」
+  的分裂。
 - `softprops/action-gh-release` 需要仓库写权限（`contents: write`）与可用的
   `GITHUB_TOKEN`（默认提供）。
 
@@ -290,7 +292,7 @@ jobs:
 ## 7. 与 npm 路径的对比（来自 RESEARCH-PUBLISH-PLAN）
 
 - npm 方案的最终形态是：先把 5 个纯后端包发布，再发 2 个带客户面的包，最后发一个
-  套件 bundle `@dsh-plugin/dsh-suite`（`dsh.bundle.patch` + dependencies 引用 7 插件），
+  套件 bundle `@dsh-plugin/dsh-suite`（`dsh.bundle.patch` + dependencies 引用 13 插件），
   用户 `dsh plugin --profile web add @dsh-plugin/dsh-suite` 一键激活。
 - 它**可行但门槛多**：见 §1.3 的 7 项前置改动 + scope 归属 + token。而且
   `profile-main` / `profile-personal` 作为 profile 目录**不能**作为 npm 包发布
@@ -336,7 +338,7 @@ jobs:
    的 `link:` 符号链接，`Copy-Item -Recurse -Force` 是**就地合并**（不删链接），
    行为安全但仍会写入真实 profile —— 因此**测试用 `-DshHome <temp>`**，正式由
    消费者本人执行。
-5. **客户面改源码要重建 `lib/client.js`**：`dsh-vibe-mode` / `dsh-mode-ui` 改动
+5. **客户面改源码要重建 `lib/client.js`**：`dsh-mode-ui` 改动
    客户端源码后必须重跑其 `build` 重新生成 `lib/client.js`，浏览器拿的是启动时
    `lib/client.js` 的产物；缺 bundle 时 `MissingClientBundleError`。靠
    `client-hmr` 在线热更可免重启 host，但 host 面改动仍需重启。
@@ -347,8 +349,8 @@ jobs:
    Release 资产与源码 tag **可能漂移**（先 build 再 tag 或 CI 兜底）。为此提供
    `release.ps1`（本地）与 workflow 骨架（CI）两道防线。
 8. **`release.ps1` 里 `lib/client.js` 的校验**基于包 `exports["."] / main` 解析
-   出的真实入口，而不是假设扁平 `lib/index.js`（vibe-mode 是 `lib/types/index.js`，
-   mode-ui 是 `lib/src/index.js`），否则会误报缺文件。
+   出的真实入口，而不是假设扁平 `lib/index.js`（mode-ui 是 `lib/src/index.js`），
+   否则会误报缺文件。
 
 ---
 
@@ -356,8 +358,8 @@ jobs:
 
 | 文件 | 作用 |
 |---|---|
-| `plugin/release.ps1` | 依赖顺序 build 7 插件 → 打 `dsh-suite-<version>.zip` → 打印（非执行）tag+Release 命令 |
-| `plugin/setup.ps1` | 消费者一次性安装：拷 7 插件进 profile node_modules + 拷 preset + 暂存 patch + 校验入口/bundle（幂等） |
+| `plugin/release.ps1` | 依赖顺序 build 14 包 → 打 `dsh-suite-<version>.zip` → 打印（非执行）tag+Release 命令 |
+| `plugin/setup.ps1` | 消费者一次性安装：拷 14 包进 profile node_modules + 拷 preset + 暂存 patch + 校验入口/bundle（幂等） |
 | `plugin/start.ps1` | 每日启动：`dsh web --patch <staged patch>`（不 build/install） |
 | `plugin/README.md` | 随 zip 的安装/使用说明 |
 | `plugin/VERSION` | 单源版本号（`0.1.0`） |
@@ -376,4 +378,4 @@ jobs:
 - `doc/PLUGIN_DEV_PLAYBOOK.md:191,292,494-499` — 插件 `main: lib/index.js`；「git 装的是源码」；整仓构建/启动实测
 - `doc/RESEARCH-BOOT-WORKFLOW.md` — 启动成本分解、最快日启动、git 上手流
 - `doc/RESEARCH-PUBLISH-PLAN.md` — npm 发布调研/阻塞/对比（§4、§5、§7）
-- 本机实测：`plugin/release.ps1` 全量 build 7 插件并产出 `release/dsh-suite-0.1.0.zip`（zip 内 0 个 `*.tsbuildinfo`）；解压后 `setup.ps1` 对 `-DshHome <temp>` 跑两次（幂等），7 插件入口/2 个 client bundle/preset/staged patch 全部校验通过；`run.ps1 -Fast --dump-config` 正确跳过 build 与 install。
+- 本机实测（**设计写作时的快照**,当时为 7 插件 / 2 个客户面 bundle;现套件已扩到 14 包、客户面仅 mode-ui）:`plugin/release.ps1` 全量 build 并产出 `release/dsh-suite-0.1.0.zip`（zip 内 0 个 `*.tsbuildinfo`）；解压后 `setup.ps1` 对 `-DshHome <temp>` 跑两次（幂等），插件入口/client bundle/preset/staged patch 全部校验通过；`run.ps1 -Fast --dump-config` 正确跳过 build 与 install。

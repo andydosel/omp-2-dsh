@@ -1,26 +1,41 @@
-# dsh profile-main — 插件集成 Profile(compact-mode + vibe-mode + read/write + advisor + wechat + mode-ui)
+# dsh profile-main — 插件集成 Profile(compact-mode + read/write + advisor + wechat + mode-ui + 协调套件)
 
-把六个独立插件(dsh-compact-mode、dsh-vibe-mode、dsh-tool-read-write、
-dsh-advisor、dsh-channel-wechat、dsh-mode-ui)接入 DeepSeek Harness(dsh)的可运行 profile
-补丁层。基于 `dsh-base` + `dsh-web-app` 两个 bundle 层,禁用其自带的
-`compaction-basic` / `command-compact` / `tool-fs`,插入六个插件。
+把 13 个插件(dsh-compact-mode、dsh-tool-read-write、dsh-advisor、dsh-channel-wechat、
+dsh-mode-ui,以及协调套件 dsh-orchestrator、dsh-review-gate、dsh-question-board、
+dsh-task-board、dsh-rules、dsh-peers、dsh-org;压缩审阅树 dsh-tree-engine 作为 compact-mode
+的依赖)接入 DeepSeek Harness(dsh)的可运行 profile 补丁层。基于 `dsh-base` + `dsh-web-app`
+两个 bundle 层,禁用其自带的 `compaction-basic` / `command-compact` / `tool-fs`,插入 **12 个
+插件行**(tree-engine 作为 compact-mode 的 `workspace:*` 依赖,不经 profile 单独挂行)。
+共享库 `dsh-worker-spawn`(`@dsh-plugin/dsh-worker-spawn`)是 `dsh-orchestrator` 的运行时
+依赖,随套件安装进 profile node_modules,但**不作为 profile 行挂载**。
 
 ## 插件清单
 
 | 插件 | 状态 | 说明 |
 |---|---|---|
+| dsh-tree-engine | ✅ 依赖 | 压缩审阅树引擎;包名是 `@dsh-plugin/tree-engine`,由 dsh-compact-mode 以该包名引入,**不经 profile 单独挂行** |
 | dsh-compact-mode | ✅ 启用 | `ctx.compaction` 后端 + `/compact*` 命令族(依赖 dsh-tree-engine) |
-| dsh-vibe-mode | ✅ 启用 | DIRECTOR 调度模式 + `/vibe` 命令族 |
 | dsh-tool-read-write | ✅ 启用 | **替换** `@deepseek-ai/dsh-tool-fs` 全家:同名 `read`/`write`/`edit`/`read_image` + 新增 `inspect_image`(omp 风格选择器/归档/SQLite/URL 等) |
 | dsh-advisor | ✅ 启用 | 会话顾问:reviewer 子代理(read/grep/glob + `advise`),immuneTurns=3,syncBacklog=off |
-| dsh-mode-ui | ✅ 启用 | **模式状态 Web UI**:host 投影单元(fold `compact/mode`/`vibe/mode`/`advisor/status`/`wechat/channel`)+ 会话头部徽章(COMPACT/VIBE/ADVISOR/WECHAT) |
+| dsh-mode-ui | ✅ 启用 | **模式状态 Web UI**:host 投影单元(fold `compact/mode`/`advisor/status`/`wechat/channel`)+ 会话头部徽章(COMPACT/ADVISOR/WECHAT) |
+| dsh-orchestrator | ✅ 启用 | 编排器:review 循环 + `subtask_parallel` 递归扇出(经 dsh-worker-spawn 派发 worker;reviewer 复用 dsh-advisor 的 helper) |
+| dsh-review-gate | ✅ 启用 | 复核门(`--review`):计划审批期间只围写路径(protectedPaths),状态走 `review-gate/state` 事件 + `reviewGate` 投影 |
+| dsh-question-board | ✅ 启用 | 异步问题收件箱:持久化 `question/*` 事件 → `questionBoard` 投影 + 全局 `ask_question` 工具 + `ctx.questionBoard` |
+| dsh-task-board | ✅ 启用 | 任务板:持久化 `task/*` 事件 → `taskBoard` 投影 + `task_new/update/close/reopen/list` 工具 + `ctx.taskBoard` |
+| dsh-rules | ✅ 启用 | 规则层:advisory 文件注入 `rules:advisory` 提示段 + `gateRules` 逐调用审批门(`ctx.rules`) |
+| dsh-peers | ✅ 启用 | 会话对等通道:持久化 `peer/message` 事件 + `ctx.peers` 服务 + 全局 `peer_send` 工具 |
+| dsh-org | ✅ 启用 | 会话组织:角色模型(`org/*` 事件 → `ctx.org` + `org` 投影)+ `/org` 命令族 + 角色能力包络(**须在 `peers` 之后挂载**);客户端面:`conversation.input.dock` 组织面板(`lib/client.js`,接管会话列表 + 解除/禁止) |
 | dsh-channel-wechat | ⛔ 停用 | 微信(iLink)渠道,`enabled: false` 挂载但不轮询。**hermes 仍持有账号**,激活步骤见下文 |
+| dsh-worker-spawn | 📦 库 | 纯库包(`@dsh-plugin/dsh-worker-spawn`):worker 派发基座,无插件入口、无 Context key,不作为 profile 行;仅作为 dsh-orchestrator 的运行时依赖安装 |
+
+> `cordis.patch.yml` 实际插入 **12 个插件行**(上表 13 个插件里 tree-engine 不挂行、worker-spawn
+> 是纯库),再挂一行 `agent-preset-registry` 选 web 默认 preset。
 
 ## 目录结构
 
-- `cordis.patch.yml` — 补丁层:禁用基座行 + 插入六个插件(含完整配置)+ web 默认 preset 选择
+- `cordis.patch.yml` — 补丁层:禁用基座行 + 插入 12 个插件行(含完整配置)+ web 默认 preset 选择
 - `agent-presets/standard-rw/agent.cordis.yml` — **web 面 read/write 替换用的 preset 成品**(`standard` 去掉 `tool-fs` 行,见下)
-- `run.ps1` — Windows PowerShell 一键脚本:按依赖序构建七个项目,再启动 dsh web
+- `run.ps1` — Windows PowerShell 一键脚本:按依赖序构建 14 个包,再启动 dsh web
 - `package.json` / `pnpm-workspace.yaml` — 作为独立 profile 安装到
   `~/.dsh/profiles/main/` 时所需(与官方 profile 目录结构一致)
 
@@ -29,20 +44,28 @@ dsh-advisor、dsh-channel-wechat、dsh-mode-ui)接入 DeepSeek Harness(dsh)的�
 1. dsh monorepo 已 clone、已 `pnpm install`(参考仓库
    `C:\Users\Vantage_XLST\Documents\dsh`),Node ≥ 22。
 2. 插件工作区已 `pnpm install`(见下「tree-engine 如何被解析」)。
-3. **七个插件项目必须先构建**,顺序:tree-engine → compact-mode → vibe-mode
-   → tool-read-write → advisor → channel-wechat → mode-ui:
+3. **14 个包必须先构建**,顺序:worker-spawn → tree-engine → compact-mode →
+   tool-read-write → advisor → channel-wechat → mode-ui → review-gate →
+   question-board → rules → peers → org → task-board → orchestrator:
 
    ```powershell
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-worker-spawn run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-tree-engine run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-compact-mode run build
-   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-vibe-mode run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-tool-read-write run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-advisor run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-channel-wechat run build
    pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-mode-ui run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-review-gate run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-question-board run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-rules run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-peers run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-org run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-task-board run build
+   pnpm --dir C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\dsh-orchestrator run build
    ```
 
-   `run.ps1` 会自动按该顺序构建再启动,不必手动执行上面七条。
+   `run.ps1` 会自动按该顺序构建再启动,不必手动执行上面十四条。
 
 4. **把插件按包名安装进 web profile**(一次性;`cordis.patch.yml` 的行现在用
    **包名**而非 `file://` URL 引用插件 —— 包名解析基于 profile 目录的
@@ -51,13 +74,14 @@ dsh-advisor、dsh-channel-wechat、dsh-mode-ui)接入 DeepSeek Harness(dsh)的�
 
    ```powershell
    cd C:\Users\Vantage_XLST\Documents\dsh
-   $plugins = 'dsh-tree-engine','dsh-compact-mode','dsh-vibe-mode','dsh-tool-read-write','dsh-advisor','dsh-channel-wechat','dsh-mode-ui'
+   $plugins = 'dsh-worker-spawn','dsh-tree-engine','dsh-compact-mode','dsh-tool-read-write','dsh-advisor','dsh-channel-wechat','dsh-mode-ui','dsh-review-gate','dsh-question-board','dsh-task-board','dsh-rules','dsh-orchestrator','dsh-peers','dsh-org'
    foreach ($p in $plugins) { pnpm dsh plugin --profile web add "C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\$p" }
    ```
 
    包名形式是浏览器拿到我们的 client bundle 的前提(client-modules 按包名从
-   profile 目录解析每个 loader entry;`dsh-mode-ui` 声明 `dsh.client` +
-   `exports["./client"]`,所以它的行同时成为 web boot 入口)。
+   profile 目录解析每个 loader entry;`dsh-mode-ui`、`dsh-org`、`dsh-task-board` 声明
+   `dsh.client` + `exports["./client"]`,所以它们的行同时成为 web boot 入口,且构建
+   需产出 `lib/client.js`)。
    **重启规则**:Loader 对解析失败的包名会缓存负面结论(negative cache)。新增/
    改名插件后第一次启动若报 `Cannot find module`/加载失败,必须**完整重启**
    (旧进程的负面缓存不会自己失效),且任何声明变更都需要重启后才会生效。
@@ -78,11 +102,13 @@ pnpm dsh --profile web --patch C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin
 
 - 被禁用的行:`compaction-basic`、`command-compact`、`tool-fs`(均带 `name:` 守卫 +
   `disabled: true`);
-- 新插入的行:`compact-mode`、`vibe-mode`、`tool-read-write`、`advisor`(enabled +
-  defaultTools/immuneTurns/syncBacklog)、`mode-ui`(config 空)、
-  `channel-wechat`(`enabled: false` + `stateDir` 指向 hermes 的 `weixin/`)、
-  `agent-presets`(`default: standard-rw`)。
-- 注意:dump 是离线组合,不含 `apps/cli/src/profile-boot.ts` 注入的 agent-presets
+- 新插入的行(12 个插件行):`compact-mode`、`tool-read-write`、`advisor`(enabled +
+  defaultTools/immuneTurns/syncBacklog)、`orchestrator`(reviewersPerRound/fanOut 等)、
+  `mode-ui`(config 空)、`review-gate`(protectedPaths 等)、
+  `channel-wechat`(`enabled: false`)、`question-board`、`rules`、`task-board`、
+  `peers`、`org`;
+- preset 选择行:`agent-preset-registry`(`default: standard-rw`)。
+- 注意:dump 是离线组合,不含 `apps/cli/src/profile-boot.ts` 注入的 agent-preset
   `roots`(真实启动时该层会把 roster 钉到部署自带的 `config/agent-presets/`)。
 
 ## 真实运行
@@ -94,9 +120,9 @@ pnpm dsh web --patch C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\profile-m
 
 - **真实模型请求需要 API key**:启动前设置 `$env:DEEPSEEK_API_KEY = 'sk-...'`
   (或 dsh 支持的其他凭据方式)。
-- 无 key 也能启动:插件照常**加载并 apply**(compact 后端、`/compact*`、vibeMode
-  服务、`/vibe`、read/write/edit/read_image/inspect_image 工具、advisor 运行时、
-  wechat 行 `enabled:false` 不启动轮询),Web 服务监听 `http://127.0.0.1:3080`;
+- 无 key 也能启动:插件照常**加载并 apply**(compact 后端、`/compact*`、read/write/edit/
+  read_image/inspect_image 工具、advisor 运行时、orchestrator 编排、mode-ui 徽章、
+  wechat 行 `enabled:false` 不轮询、question-board/task-board/rules/peers/org),Web 服务监听 `http://127.0.0.1:3080`;
   只有发起模型请求时才会失败(无凭据)。
 - 也可用 `run.ps1` 一键完成构建 + 启动:
 
@@ -190,19 +216,38 @@ dsh 的 Cordis Loader 对插入行执行 `import(name, baseUrl)`:
   改为包名,不再需要)。
 
 Loader 对 ESM 模块取 `exports.default ?? exports`:类默认导出
-(compact-mode/vibe-mode/advisor)与命名导出 `apply`+`Config`(read-write/wechat)
+(compact-mode/advisor/orchestrator)与命名导出 `apply`+`Config`(read-write/wechat)
 两种形态都能直接作为插件。
 
-### vibe-mode 的入口文件位置
+### 插件入口文件位置
 
-vibe-mode 的 tsconfig 把构建产物输出到 `lib/types/`(tsc -b),package.json 的
-`main`/`exports` 已指向 `lib/types/index.js`(已修正,与构建产物一致;默认导出
-`VibeModeController`)。其余插件均确认存在 `lib/index.js` 且与 package.json
-`main` 一致。
+各插件 `package.json` 的 `main`/`exports` 均指向构建产物真实的宿主入口:带 client
+半的插件用两种布局之一——`dsh-mode-ui`、`dsh-task-board` 把宿主与 client 面放进同一
+个 `rootDir: "."` 程序(宿主入口 `lib/src/index.js`,与 `lib/client.js` 并列);
+`dsh-org` 保持宿主 `lib/index.js` 不动,client 面单独由 `tsconfig.client.json`
+输出到 `lib/client/`——其余插件均为 `lib/index.js`。因此 `release.ps1` /
+`setup.ps1` 用包 `exports["."]`/`main` 解析真实入口来校验,而不是假设扁平的
+`lib/index.js`。
+
+### dsh-org 的组织面板(client 面)
+
+`dsh-org` 的浏览器半边挂在 `conversation.input.dock`(会话级 list 座位,队列/待办
+dock 同座),渲染宿主已折叠的 `org` 投影:本会话接管的会话逐行列出,每行带 `解除`
+(`/org relinquish <id>`)与 `禁止`(`/org forbid <id>`);被 forbid 的会话不出现为可
+操作行(主机的 `forbid` 本身会同时释放接管边),其 id 落在面板底部的只读 forbidden
+行,`/org list` 仍是全局视图。面板本身不做任何客户端折叠,动作全部走会话自己的
+`/org` 命令(`ctx.remote.commands.execute(sessionId, line)`),因此无需新增 host 侧
+API。
+
+构建:宿主入口仍是 `lib/index.js`;client 面由 `tsconfig.client.json` 输出到
+`lib/client/`(js + d.ts),再由 `tsdown.client.ts`(与 dsh-mode-ui 同一 preset,
+仅 `PACKAGE_ID` 不同)打成 `lib/client.js`。`pnpm --filter @dsh-plugin/dsh-org run
+build` 三步全做;`$clientPlugins` 列表(release/setup/run.ps1)已含 `dsh-org`,构建
+产物缺失时会响亮失败。
 
 ### mode-ui 与 resume(持久化目录 annex)
 
-四个模式/渠道事件(`compact/mode`、`vibe/mode`、`advisor/status`、
+三个模式/渠道事件(`compact/mode`、`advisor/status`、
 `wechat/channel`)由 out-of-tree 插件写入会话日志,dsh-mode-ui 的投影单元
 按会话折叠它们并驱动头部徽章。**2026-08-21 起**这些事件已通过 monorepo 的
 `packages/mode/mode-events`(类型专用 annex 包)注册进 harness 的持久化目录

@@ -14,6 +14,9 @@ dist/
 # scratch / experiment output
 .e2e-scratch/
 
+# rendered HTML views of docs/ (source of truth stays the Markdown under doc/)
+.view/
+
 # plugin-owned mode-state JSON snapshots (cwd fallback when DSH_HOME is unset)
 .*-state.json
 .*-state.json.tmp
