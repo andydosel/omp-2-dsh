@@ -5,6 +5,8 @@ Convention (project): docs are ARCHIVED as Markdown under `doc/`; when shown to
 the user they are rendered to HTML under `.view/` for readability. This script
 implements the render step. Source of truth stays the Markdown file.
 
+Also renders ```mermaid fenced blocks via mermaid.js (CDN).
+
 Usage:
     python scripts/md2html.py <markdown-path> [--out <html-path>] [--open]
 
@@ -14,7 +16,9 @@ Requires: markdown-it-py (pip install markdown-it-py)
 from __future__ import annotations
 
 import argparse
+import html as html_lib
 import os
+import re
 import subprocess
 import sys
 
@@ -29,8 +33,8 @@ CSS = """
 body{margin:0;background:#f0f2f5;color:var(--fg);
   font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,-apple-system,sans-serif;
   font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased}
-main{max-width:920px;margin:32px auto;background:var(--bg);padding:48px 56px;
-  border-radius:14px;box-shadow:0 2px 16px rgba(31,35,40,.08)}
+main{max-width:960px;margin:32px auto;background:var(--bg);padding:48px 56px;
+  border-radius:14px;box-shadow:0 2px 16px rgba(31,35,40,.08);overflow-wrap:break-word}
 h1,h2,h3,h4{line-height:1.3;font-weight:650;margin:1.6em 0 .6em}
 h1{font-size:1.9em;border-bottom:2px solid var(--border);padding-bottom:.3em;margin-top:0}
 h2{font-size:1.45em;border-bottom:1px solid var(--border);padding-bottom:.25em}
@@ -40,20 +44,42 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 code{background:var(--code-bg);padding:.15em .4em;border-radius:5px;
   font-family:"Cascadia Code",Consolas,"Courier New",monospace;font-size:.9em}
 pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;
-  padding:14px 16px;overflow:auto;line-height:1.55}
-pre code{background:none;padding:0;font-size:.86em}
+  padding:14px 16px;overflow-x:auto;line-height:1.55}
+pre code{background:none;padding:0;font-size:.86em;white-space:pre}
 blockquote{margin:1em 0;padding:.4em 1em;border-left:4px solid var(--border);
   background:#fbfcfd;color:var(--muted)}
-table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.94em;display:block;overflow:auto}
-th,td{border:1px solid var(--border);padding:8px 12px;text-align:left;vertical-align:top}
+table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.94em;table-layout:fixed}
+th,td{border:1px solid var(--border);padding:8px 12px;text-align:left;vertical-align:top;
+  overflow-wrap:anywhere;word-break:break-word}
 th{background:var(--code-bg);font-weight:650}
 tr:nth-child(even) td{background:#fafbfc}
 hr{border:none;border-top:1px solid var(--border);margin:2em 0}
 ul,ol{padding-left:1.6em;margin:.6em 0}
-li{margin:.25em 0}
+li{margin:.25em 0;overflow-wrap:break-word}
 strong{font-weight:650}
-li,td{word-break:break-word}
+.mermaid{margin:1.2em 0;text-align:center;overflow-x:auto}
+.mermaid svg{max-width:100%;height:auto}
 """
+
+MERMAID_SCRIPT = (
+    '<script type="module">'
+    "import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';"
+    "mermaid.initialize({startOnLoad:true,theme:'neutral',securityLevel:'loose',"
+    "flowchart:{useMaxWidth:true},fontFamily:'Segoe UI,Microsoft YaHei,sans-serif'});"
+    "</script>"
+)
+
+
+def render_mermaid(body: str) -> str:
+    """Convert ```mermaid fences (rendered by markdown-it as <pre><code class="language-mermaid">)
+    into <div class="mermaid"> so mermaid.js picks them up."""
+    def repl(m: re.Match) -> str:
+        code = html_lib.unescape(m.group(1))
+        return '<div class="mermaid">' + code + '</div>'
+    return re.sub(
+        r'<pre><code class="language-mermaid">(.*?)</code></pre>',
+        repl, body, flags=re.S,
+    )
 
 
 def render(md_path: str, out_path: str, title: str) -> str:
@@ -63,11 +89,11 @@ def render(md_path: str, out_path: str, title: str) -> str:
         md.disable("linkify")  # linkify-it-py is optional; not required for these docs
     except Exception:
         md = MarkdownIt("commonmark").enable(["table", "strikethrough"])
-    body = md.render(src)
+    body = render_mermaid(md.render(src))
     html = (
         '<!doctype html>\n<html lang="zh-CN">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"<title>{title}</title>\n<style>{CSS}</style>\n</head>\n"
+        f"<title>{title}</title>\n<style>{CSS}</style>\n{MERMAID_SCRIPT}\n</head>\n"
         f"<body><main>\n{body}\n</main></body>\n</html>\n"
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
