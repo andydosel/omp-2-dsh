@@ -95,9 +95,7 @@ dsh-suite-0.1.0/
 │   ├── dsh-task-board/       ├── dsh-rules/
 │   ├── dsh-orchestrator/     ├── dsh-peers/
 │   ├── dsh-org/              └── dsh-worker-spawn/     # 纯库(无插件入口)
-├── agent-presets/
-│   └── standard-rw/          # preset.yml + agent.cordis.yml(web 面 read/write 替换所需)
-├── cordis.patch.yml          # 覆盖层(zip 根)
+├── cordis.patch.yml          # 覆盖层(zip 根;内含 standard-rw preset 声明行)
 ├── setup.ps1                 # Windows 一次性安装
 ├── start.ps1                 # Windows 日常启动
 ├── README.md
@@ -121,10 +119,12 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 - 把 14 个预构建包(13 插件 + 共享库 `dsh-worker-spawn`)复制到
   `~/.dsh/profiles/web/node_modules/@dsh-plugin/`
   (cordis Loader 与 client-modules 据此**按包名**解析每一行,含 `mode-ui`/`dsh-org` 的 `lib/client.js`);
-- 把 `standard-rw` preset 复制到 `~/.dsh/.agent-presets/standard-rw/`
-  (web 面 read/write 替换所必需,见「web 面的 read/write 替换」);
 - 把覆盖层落到 `~/.dsh/dsh-suite/cordis.patch.yml`(供 `start.ps1` / 手动命令引用);
 - 逐个校验每个包的可运行入口与 `lib/`。
+
+> **preset 不再有安装步骤**:`standard-rw` 现在是覆盖层里的**声明行**
+> (`@deepseek-ai/dsh-agent-preset`,`config.plugins` = 原 `agent.cordis.yml` 的行)。
+> 0.2.0-rc.2 已废弃 preset 目录机制,`~/.dsh/.agent-presets/` 不再被任何代码读取。
 
 #### macOS / Linux(手动等价——zip 里只有 `.ps1`,没有 `.sh`)
 
@@ -139,11 +139,7 @@ DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 mkdir -p "$DSH_HOME/profiles/web/node_modules/@dsh-plugin"
 cp -R @dsh-plugin/* "$DSH_HOME/profiles/web/node_modules/@dsh-plugin/"
 
-# 2) standard-rw preset
-mkdir -p "$DSH_HOME/.agent-presets"
-cp -R agent-presets/standard-rw "$DSH_HOME/.agent-presets/"
-
-# 3) 覆盖层(供 dsh web --patch 引用)
+# 2) 覆盖层(供 dsh web --patch 引用;standard-rw preset 随此行一起就位)
 mkdir -p "$DSH_HOME/dsh-suite"
 cp cordis.patch.yml "$DSH_HOME/dsh-suite/cordis.patch.yml"
 ```
@@ -188,7 +184,7 @@ dsh web --patch "$HOME/.dsh/dsh-suite/cordis.patch.yml"
 > (`cordis.patch.yml`)。`start.ps1`(Windows)内部就是用
 > `dsh web --patch ~/.dsh/dsh-suite/cordis.patch.yml`。额外参数(如 `--dump-config`)
 > 追加在 `--patch ...` 之后透传给 dsh。也可以直接指向解压目录里的
-> `cordis.patch.yml` 而不跑 setup(只要 14 个预构建包与 preset 已就位)。
+> `cordis.patch.yml` 而不跑 setup(只要 14 个预构建包已就位——preset 随覆盖层一起来)。
 
 ---
 
@@ -209,7 +205,13 @@ dsh web --patch "$HOME\.dsh\dsh-suite\cordis.patch.yml" --dump-config
   defaultTools/immuneTurns/syncBacklog)、`orchestrator`(reviewersPerRound/fanOut 等)、
   `mode-ui`(config 空)、`review-gate`(protectedPaths 等)、`channel-wechat`(`enabled: false`)、
   `question-board`、`rules`、`task-board`、`peers`、`org`(均默认 config);
-- preset 选择行:`agent-preset-registry`(`default: standard-rw`)。
+- preset 行:`agent-preset-registry`(`default: standard-rw`)+ 紧随其后的声明行
+  `preset-standard-rw`(`@deepseek-ai/dsh-agent-preset`,`config.id: standard-rw`,`order: 5`,
+  `config.plugins` = 23 个叶子行 + 3 个 `cordis:group`)。
+
+> 离线 `--dump-config` **不导入插件模块**,因此它只证明声明行结构正确;preset 是否真能激活
+> (每个插件名可解析、每份 config 通过各自 schema)由在线新建会话验证——那一步会挂载并审计整棵
+> preset 树,失败即响亮报错。
 
 ### 在线验证(需 API key)
 
@@ -280,6 +282,6 @@ powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -Version 0.1.0
   浏览器加载的是磁盘上的 bundle。
 - 覆盖层(`profiles/main/cordis.patch.yml`)会禁用 `compaction-basic` / `command-compact` /
   `tool-fs`;web profile 上 stock `tool-fs` 行是幂等 no-op,具体理由见文件内注释。
-- 更细的机制(Loader 如何按包名解析、为何禁用基座行、`standard-rw` preset 的同名 shadow 规则、
-  web 面 read/write 替换、wechat 激活步骤等)见仓库内 `profiles/main/README.md`
+- 更细的机制(Loader 如何按包名解析、为何禁用基座行、`standard-rw` preset 声明行与它的同名
+  shadow 规则、web 面 read/write 替换、wechat 激活步骤等)见仓库内 `profiles/main/README.md`
   (仅源码仓库有,不在 Release zip 里)。

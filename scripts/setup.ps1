@@ -6,10 +6,11 @@
 #      ~/.dsh/profiles/web/node_modules/@dsh-plugin/<name> so the Cordis loader
 #      and client-modules resolve every patch row BY PACKAGE NAME (including the
 #      built lib/client.js bundle for the client-faced plugins).
-#   2. Copies agent-presets/standard-rw -> ~/.dsh/.agent-presets/standard-rw.
-#   3. Stages cordis.patch.yml at ~/.dsh/dsh-suite/cordis.patch.yml so start.ps1
-#      can reference a stable --patch path.
-#   4. Verifies each plugin's resolved host entry (and lib/client.js where needed).
+#   2. Stages cordis.patch.yml at ~/.dsh/dsh-suite/cordis.patch.yml so start.ps1
+#      can reference a stable --patch path. That patch declares the `standard-rw`
+#      agent preset itself (a `@deepseek-ai/dsh-agent-preset` row), so there is
+#      no preset directory to install: 0.2.0-rc.2 reads none.
+#   3. Verifies each plugin's resolved host entry (and lib/client.js where needed).
 #
 # Usage (from anywhere; the script lives in the extracted zip root):
 #   powershell -ExecutionPolicy Bypass -File setup.ps1
@@ -69,11 +70,9 @@ function Resolve-PluginEntry {
 
 $profileDir = Join-Path $DshHome 'profiles\web'
 $pluginsDir = Join-Path $profileDir 'node_modules\@dsh-plugin'
-$presetDir  = Join-Path $DshHome '.agent-presets'
 $suiteState = Join-Path $DshHome 'dsh-suite'
 
 New-Item -ItemType Directory -Force -Path $pluginsDir | Out-Null
-New-Item -ItemType Directory -Force -Path $presetDir  | Out-Null
 New-Item -ItemType Directory -Force -Path $suiteState | Out-Null
 
 # These are the INSTALLED directory names = the package name minus the
@@ -110,17 +109,7 @@ foreach ($p in $plugins) {
     Write-Host "  - @dsh-plugin/$p"
 }
 
-# ── 2) install the standard-rw agent preset ─────────────────────────────────
-Write-Host "==> install agent preset standard-rw"
-$presetTarget = Join-Path $presetDir 'standard-rw'
-$presetSrc    = Join-Path $src 'agent-presets\standard-rw'
-New-Item -ItemType Directory -Force -Path $presetTarget | Out-Null
-foreach ($f in @('preset.yml', 'agent.cordis.yml')) {
-    if (-not (Test-Path (Join-Path $presetSrc $f))) { throw "zip is missing agent-presets/standard-rw/$f." }
-    Copy-Item -Force (Join-Path $presetSrc $f) $presetTarget
-}
-
-# ── 3) stage the overlay patch for start.ps1 ────────────────────────────────
+# ── 2) stage the overlay patch for start.ps1 ────────────────────────────────
 Write-Host "==> stage overlay patch for start.ps1"
 Copy-Item -Force (Join-Path $src 'cordis.patch.yml') (Join-Path $suiteState 'cordis.patch.yml')
 

@@ -23,7 +23,7 @@
    的通道分发 —— Release 资产是最省事的那个。
 2. **一次构建，打成一个 zip**，里面每个插件都是**自包含可解析包**
    `@dsh-plugin/<name>/{package.json, lib/**}`，再带上 profile 覆盖层
-   `cordis.patch.yml`、代理预设 `agent-presets/standard-rw/`、消费者
+   `cordis.patch.yml`（内含代理预设 `standard-rw` 的声明行）、消费者
    `setup.ps1` / `start.ps1` / `README.md`。
 3. **消费者流程极简**：下载 Release 资产 → 解压 → 跑一次 `setup.ps1` →
    每天一条 `start.ps1`（就是 `dsh web --patch <staged patch>`，**不 build、
@@ -103,11 +103,7 @@ dsh-suite-<version>/
 ├── README.md                        # 安装/使用说明
 ├── setup.ps1                        # 消费者一次性安装脚本（幂等）
 ├── start.ps1                        # 每日启动脚本
-├── cordis.patch.yml                 # profile 覆盖层（disables + 插件行 + agent-presets 选择）
-├── agent-presets/
-│   └── standard-rw/
-│       ├── preset.yml
-│       └── agent.cordis.yml
+├── cordis.patch.yml                 # profile 覆盖层（disables + 插件行 + agent-presets 选择 + standard-rw 声明行）
 └── @dsh-plugin/                     # 直接映射 → ~/.dsh/profiles/web/node_modules/@dsh-plugin/
     ├── tree-engine/                 {package.json, lib/**}
     ├── dsh-worker-spawn/            {package.json, lib/**}   # 纯库（无插件入口）
@@ -132,8 +128,11 @@ dsh-suite-<version>/
   显式只拷这两样，并删掉拷进来的 `*.tsbuildinfo` 构建缓存。
 - `@dsh-plugin/` 这个目录名与 profile 的 `node_modules/@dsh-plugin/` **同名**，
   所以 `setup.ps1` 用一条 `Copy-Item` 就能把 plugins 拷到位，无需改名。
-- `cordis.patch.yml`、`agent-presets/standard-rw/`、`setup.ps1`、`start.ps1`、
-  `README.md` 都放在 zip 根，与 `@dsh-plugin/` 平级。
+- `cordis.patch.yml`、`setup.ps1`、`start.ps1`、
+  `README.md` 都放在 zip 根，与 `@dsh-plugin/` 平级。`standard-rw` preset 不再
+  是独立目录：0.2.0-rc.2 的 preset 是 `cordis.patch.yml` 里的一行声明
+  （`@deepseek-ai/dsh-agent-preset`，`config.plugins` = 原 `agent.cordis.yml`），
+  随覆盖层一起到位，消费者无需安装任何 preset 目录。
 
 ### 2.3 为什么用「拷贝到 node_modules」而不是「`dsh plugin add`」
 
@@ -167,10 +166,9 @@ dsh-suite-<version>/
 
 1. 把 zip 里每个 `@dsh-plugin/<name>` **合并拷贝**到
    `~/.dsh/profiles/web/node_modules/@dsh-plugin/<name>`（自动建目录）。
-2. 把 `agent-presets/standard-rw` → `~/.dsh/.agent-presets/standard-rw`。
-3. 把 `cordis.patch.yml` → `~/.dsh/dsh-suite/cordis.patch.yml`（给 start.ps1 一个
-   稳定的 `--patch` 路径）。
-4. 校验每个插件的 `package.json` **解析出的宿主入口**存在，且唯一客户面插件
+2. 把 `cordis.patch.yml` → `~/.dsh/dsh-suite/cordis.patch.yml`（给 start.ps1 一个
+   稳定的 `--patch` 路径；`standard-rw` preset 的声明行就在这份 patch 里）。
+3. 校验每个插件的 `package.json` **解析出的宿主入口**存在，且唯一客户面插件
    （mode-ui）的 `lib/client.js` 存在。校验用的是包 `exports["."]
    / main` 解析出的真实入口（mode-ui 是 `lib/src/index.js`，不是扁平
    `lib/index.js`）。

@@ -34,7 +34,7 @@ dsh-task-board、dsh-rules、dsh-peers、dsh-org;压缩审阅树 dsh-tree-engine
 ## 目录结构
 
 - `cordis.patch.yml` — 补丁层:禁用基座行 + 插入 12 个插件行(含完整配置)+ web 默认 preset 选择
-- `agent-presets/standard-rw/agent.cordis.yml` — **web 面 read/write 替换用的 preset 成品**(`standard` 去掉 `tool-fs` 行,见下)
+  + **`standard-rw` preset 声明行**(`@deepseek-ai/dsh-agent-preset`,见下「web 面的 read/write 替换」)
 - `run.ps1` — Windows PowerShell 一键脚本:按依赖序构建 14 个包,再启动 dsh web
 - `package.json` / `pnpm-workspace.yaml` — 作为独立 profile 安装到
   `~/.dsh/profiles/main/` 时所需(与官方 profile 目录结构一致)
@@ -85,9 +85,10 @@ dsh-task-board、dsh-rules、dsh-peers、dsh-org;压缩审阅树 dsh-tree-engine
    **重启规则**:Loader 对解析失败的包名会缓存负面结论(negative cache)。新增/
    改名插件后第一次启动若报 `Cannot find module`/加载失败,必须**完整重启**
    (旧进程的负面缓存不会自己失效),且任何声明变更都需要重启后才会生效。
-5. **(仅 web 面 read/write 替换)安装 `standard-rw` preset**,见下「web 面的
-   read/write 替换」一节。patch 已把 web 默认 preset 指向 `standard-rw`,未安装
-   时新建会话会响亮失败(报告可用 preset 列表)——这是刻意的 fail-loud 行为。
+5. **无需安装 preset**:`standard-rw` 是 `cordis.patch.yml` 里的声明行,随补丁一起
+   生效,见下「web 面的 read/write 替换」一节。patch 把 web 默认 preset 指向
+   `standard-rw`,声明缺失/插件名或 config 对不上时,新建会话会响亮失败(报告可用
+   preset 列表或不可用的行)——这是刻意的 fail-loud 行为。
 
 ## 验证(无需 API key)
 
@@ -107,9 +108,12 @@ pnpm dsh --profile web --patch C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin
   `mode-ui`(config 空)、`review-gate`(protectedPaths 等)、
   `channel-wechat`(`enabled: false`)、`question-board`、`rules`、`task-board`、
   `peers`、`org`;
-- preset 选择行:`agent-preset-registry`(`default: standard-rw`)。
-- 注意:dump 是离线组合,不含 `apps/cli/src/profile-boot.ts` 注入的 agent-preset
-  `roots`(真实启动时该层会把 roster 钉到部署自带的 `config/agent-presets/`)。
+- preset 行:`agent-preset-registry`(`default: standard-rw`)+ 声明行 `preset-standard-rw`
+  (`name: '@deepseek-ai/dsh-agent-preset'`,`config.id: standard-rw`,`config.order: 5`,
+  `config.plugins` = 原 `agent.cordis.yml` 的行逐行照搬)。
+- 注意:dump 是离线组合,**不导入插件模块**,所以它只证明声明行结构合规;preset 能否真
+  激活(插件名可解析、每份 config 过各自 schema)要由真实启动后的新建会话来证明——
+  那一步会挂载整棵 preset 树并审计每一行。
 
 ## 真实运行
 
@@ -130,36 +134,64 @@ pnpm dsh web --patch C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\profile-m
   powershell -ExecutionPolicy Bypass -File C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\profile-main\run.ps1
   ```
 
-## web 面的 read/write 替换(为什么需要 preset 步骤 + 怎么做)
+## web 面的 read/write 替换(为什么需要 preset + 怎么做)
 
 **机制事实**(详见 `doc/RESEARCH-FS-TOOLS.md` §3-§4、§6 与 dsh 源码):
 - web profile 的**宿主层 `tool-fs` 已被 web-app bundle 禁用**;模型可见的 fs 工具
-  来自 **agent preset**(`standard`/`code` 等,每个 preset 在 agent 作用域挂一行
-  `tool-fs`)。同 scope 内同名注册会直接抛错,preset 的 `read` 会 shadow 全局的
-  `read` —— 所以只改宿主层对 web 无效。
-- **profile 无法自带 preset 目录**:`apps/cli/src/profile-boot.ts` 在组合时把
-  agent-presets 行的 `roots` 无条件钉死为部署自带的 `config/agent-presets/`
-  (只读),patch 里写的 `roots` 会被覆盖;可写的 roster 根只有
-  `$DSH_HOME/.agent-presets`。patch 唯一能动的键是 `default`。
-- 因此实现的是 **选项 (b)**:profile 仓库**自带成品 preset**(`standard` 去掉
-  `tool-fs` 行,其余原样),用户把目录拷进 `~/.dsh/.agent-presets/` 即可;同时
-  patch 把 web 默认 preset 设为 `standard-rw` —— 这是机制允许的、最接近
-  选项 (a) 的「profile 的 preset 解析自动拾取」。
+  来自 **agent preset**(`standard`/`ptc`/`minimal`/`cordis` 等,每个 preset 在 agent
+  作用域挂一行 `tool-fs`)。同 scope 内同名注册会直接抛错,preset 的 `read` 会 shadow
+  全局的 `read` —— 所以只改宿主层对 web 无效。
+- **0.2.0-rc.2 起 preset 是声明行,不是目录**:`@deepseek-ai/dsh-agent-preset` 的一行
+  (`config: {id, name, description, order, plugins}`)挂在 bundle 或 patch 层里,和随
+  包自带的 `standard`/`ptc`/`minimal`/`cordis` 四行同形;`plugins` 就是原先
+  `agent.cordis.yml` 的整份行列表。旧的 roster 目录机制(`.agent-presets/<id>/`,
+  以及 `profile-boot.ts` 把 `roots` 钉到部署自带 `config/agent-presets/`)已被移除,
+  `$DSH_HOME/.agent-presets/` 不再被任何代码读取。
+- 因此实现的是 **选项 (b)**:本 profile 在补丁层里**自带成品 preset 声明行**
+  (`standard` 去掉 `tool-fs` 行与 compaction 两行,其余逐行原样),同时 patch 把 web
+  默认 preset 设为 `standard-rw`。这是机制允许的做法:声明行与选中它的
+  `default` 同处一层,不再有任何安装步骤。
 - **CLI/TUI(仅 base bundle 的 profile,如 `--profile tui`)不需要 preset
   步骤**:同一 patch 在宿主层禁用 `tool-fs` + 以 host 行注册 tool-read-write,
   直接完成替换(选项 c 自动满足)。
 
-**安装 preset(一次,仅 web 面需要)**:
+**声明行(一次,写在 `cordis.patch.yml` 里,无安装步骤)**:
 
-```powershell
-Copy-Item -Recurse C:\Users\Vantage_XLST\Documents\dsh-plugin\plugin\profile-main\agent-presets\standard-rw $env:USERPROFILE\.dsh\.agent-presets\standard-rw
+```yaml
+- insert:
+    - id: preset-standard-rw
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: standard-rw
+        name: standard-rw
+        description: >-            # 原 preset.yml 的 description
+          ...
+        order: 5                    # 排在官方四行(1-4)之后
+        plugins:                    # 原 agent.cordis.yml 的行,逐行照搬
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            ...
 ```
 
 之后新会话默认就用 `standard-rw`(patch 已设 `default: standard-rw`)。临时想用
-官方 preset:web 设置 → Agent presets 选择器切回 `standard`/`code`/`minimal` 即可。
-`standard-rw` 与 `standard` 的唯一区别就是**不挂 `tool-fs` 行** —— 宿主层的
-read/write 套件因此不被 shadow;`tool-fs-search`(glob/grep)、`fs` 服务与
-`fs-observation-policy` 保持部署原样。
+官方 preset:web 设置 → Agent presets 选择器切回 `standard`/`ptc`/`minimal`/`cordis`
+即可。`standard-rw` 与 `standard` 的区别只有两处:**不挂 `tool-fs` 行**(宿主层的
+read/write 套件因此不被 shadow)、**不挂 `compaction-basic` + `command-compact` 两行**
+(宿主层 compact-mode 提供 `ctx.compaction` 与 `/compact*` 命令族);
+`tool-fs-search`(glob/grep)、`fs` 服务与 `fs-observation-policy` 保持部署原样。
+
+> **迁移时的两处 0.2.0-rc.2 修正**(原 roster 在旧版 dsh 上写的键/包名已失效):
+> 1. `dsh-persona` 不再接受 `config.text`,改为**必填 `prefix`** + `suffix`
+>    (原一句 "…{{model}} model. Your working directory is {{cwd}}." 拆成
+>    `prefix` + `suffix`,与官方 `standard` 行同形;空的 `suffix` 会把部署级 cwd 段
+>    shadow 掉,所以必须显式写上);
+> 2. `@deepseek-ai/dsh-workflow-worker-thread` 在 0.2.0-rc.2 已更名/取代为
+>    `@deepseek-ai/dsh-workflow-ptc`(行 id 随官方 `standard` 用 `workflow-ptc`,
+>    `config.provider: spawn` 不变)。
+>
+> 其余 21 个叶子行的包名与 config 键都通过了 0.2.0-rc.2 核对(逐个对
+> `packages/*/*/package.json` 的 `name` 与插件各自 `Config` schema),
+> **任何一个对不上都会让 preset 挂载失败**(不是静默回退)。
 
 ## wechat 激活步骤(当前保持禁用)
 
@@ -199,7 +231,7 @@ pnpm dsh --profile main          # 或 pnpm dsh --profile main --dump-config 验
 目录的 `node_modules` —— 用 `--profile main` 前需先在 `~/.dsh/profiles/main` 下
 执行与 web 相同的 `dsh plugin --profile main add <abs path>` 安装循环(见
 「前置条件」第 4 条),否则 Loader 找不到包。web 默认 preset 行同样有效
-(`standard-rw` 仍需按上文装进 `~/.dsh/.agent-presets/`)。
+(`standard-rw` 的声明行就在同一份 patch 里,无需额外安装)。
 
 ## 关键机制说明
 
@@ -281,7 +313,7 @@ workspace 软链;若未安装,在该目录执行 `pnpm install` 即可。read-wr
 ### preset 的同名 shadow 规则(web 面为什么这样设计)
 
 dsh 工具注册表按 scope 分层(agent → preset → global,最近者胜):
-- `standard`/`code` preset 在 preset 层挂 `tool-fs` 的 `read` 等 → **shadow 掉**
+- 官方 `standard`/`ptc` preset 在 preset 层挂 `tool-fs` 的 `read` 等 → **shadow 掉**
   宿主层 tool-read-write 的同名工具(合法,不同层),所以不改 preset 时 web 面行为
   不变;
 - `standard-rw` 不挂 `tool-fs` → agent 直接看到宿主层的 omp 风格

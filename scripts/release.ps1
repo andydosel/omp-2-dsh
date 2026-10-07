@@ -10,8 +10,9 @@
 #
 # Each plugin is shipped as a self-contained resolvable package:
 #   @dsh-plugin/<name>/package.json  +  @dsh-plugin/<name>/lib/**
-# alongside the profile overlay (cordis.patch.yml), the agent preset
-# (agent-presets/standard-rw/), the consumer setup.ps1/start.ps1, and a README.
+# alongside the profile overlay (cordis.patch.yml — which also carries the
+# `standard-rw` agent preset DECLARATION; 0.2.0-rc.2 reads no preset directory),
+# the consumer setup.ps1/start.ps1, and a README.
 #
 # Usage (Windows PowerShell):
 #   powershell -ExecutionPolicy Bypass -File release.ps1
@@ -73,8 +74,7 @@ function Resolve-PluginEntry {
 $repoRoot    = Split-Path -Parent $PSScriptRoot     # .../omp-2-dsh (scripts/ lives at the repo root)
 $pluginRoot  = Join-Path $repoRoot 'plugins'
 $scriptDir   = $PSScriptRoot                        # .../omp-2-dsh/scripts
-$profileDir  = Join-Path $repoRoot 'profiles\main'
-$patchFile   = Join-Path $profileDir 'cordis.patch.yml'
+$patchFile   = Join-Path $repoRoot 'profiles\main\cordis.patch.yml'
 $versionFile = Join-Path $repoRoot 'VERSION'
 
 # ── single source of truth for the suite version ────────────────────────────
@@ -168,12 +168,9 @@ foreach ($p in $plugins) {
     Write-Host "  + @dsh-plugin/$unscoped"
 }
 
-# ── 3) copy the profile overlay + preset + consumer scripts/README ──────────
-$presetDst = Join-Path $pkgDir 'agent-presets\standard-rw'
-New-Item -ItemType Directory -Force -Path $presetDst | Out-Null
-Copy-Item -Force $patchFile (Join-Path $pkgDir 'cordis.patch.yml')
-Copy-Item -Force (Join-Path $profileDir 'agent-presets\standard-rw\preset.yml')       $presetDst
-Copy-Item -Force (Join-Path $profileDir 'agent-presets\standard-rw\agent.cordis.yml') $presetDst
+# ── 3) copy the profile overlay + consumer scripts/README ──────────────────
+$patchDst = Join-Path $pkgDir 'cordis.patch.yml'
+Copy-Item -Force $patchFile $patchDst
 Copy-Item -Force (Join-Path $scriptDir 'setup.ps1')  $pkgDir
 Copy-Item -Force (Join-Path $scriptDir 'start.ps1')  $pkgDir
 Copy-Item -Force (Join-Path $repoRoot 'README.md')   $pkgDir
