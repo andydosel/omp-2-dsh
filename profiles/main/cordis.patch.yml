@@ -1,5 +1,5 @@
-# dsh profile-main overlay: compact-mode + vibe-mode + tool-read-write +
-# advisor + mode-ui + channel-wechat(disabled), applied AFTER the dsh-base and
+# dsh profile-main overlay: compact-mode + tool-read-write + advisor +
+# mode-ui + channel-wechat(disabled), applied AFTER the dsh-base and
 # dsh-web-app bundle layers (via `--patch` on the web profile, or as the user
 # layer of a `main` profile installed under ~/.dsh/profiles/).
 #
@@ -31,6 +31,17 @@
   name: '@deepseek-ai/dsh-tool-fs'
   disabled: true
 
+# ── base-layer invariants this overlay relies on ────────────────────────────
+#
+# 0.2.0-rc.2 `@deepseek-ai/dsh-token-meter` declares
+# `static inject = ['sessionProjections']` (packages/llm/token-meter/src/index.ts),
+# and `ctx.goals` resolves through that same projections service, so
+# `session-projection` and `token-meter` must stay mounted TOGETHER. The dsh-base
+# bundle owns both rows (`session-projection`, `token-meter`) and this overlay
+# disables neither, which is what the requirement asks for. Do not add a
+# `disabled: true` row for either, and keep the pair together if this patch is
+# ever layered onto a profile that does not inherit dsh-base.
+
 # ── plugins ─────────────────────────────────────────────────────────────────
 #
 # `name` is a module specifier the Cordis Loader imports. Package names are
@@ -41,9 +52,9 @@
 # name from the profile dir, and a failed resolution is cached as a permanent
 # negative verdict. The mode-ui package declares `dsh.client` and
 # `exports["./client"]`, so its row also becomes a web boot entry.
-# Build prerequisites: tree-engine, compact-mode, vibe-mode, tool-read-write,
-# advisor, channel-wechat and mode-ui (both faces) must be `pnpm run build`
-# first (see README/run.ps1).
+# Build prerequisites: tree-engine, compact-mode, tool-read-write, advisor,
+# channel-wechat and mode-ui (both faces) must be `pnpm run build` first
+# (see README/run.ps1).
 - insert:
     - id: compact-mode
       name: '@dsh-plugin/dsh-compact-mode'
@@ -62,19 +73,6 @@
         reviewTree: 'domain'           # 独立 domain 存储(web profile 已挂 storage-domain)
         readOnlyTools: []              # 保留字段(设计 §2.9 占位,compact-mode 不使用)
 
-    - id: vibe-mode
-      name: '@dsh-plugin/dsh-vibe-mode'
-      config:
-        # No `section`: the DIRECTOR instructions ship from the plugin default
-        # (imperative delegation rules — MUST NOT self-explore, delegate every
-        # step beyond a quick read via vibe_spawn). Override here only to
-        # customize the wording for this deployment.
-        readOnlyTools: [read, glob, grep, read_image, todo_write]
-        provider: spawn
-        waitTimeoutMs: 60000
-        maxWaitTimeoutMs: 600000
-        maxConsecutiveWakes: 3
-
     # The omp-style read/write suite, replacing `@deepseek-ai/dsh-tool-fs`
     # wholesale (same-name read/write/edit/read_image + new inspect_image).
     # All config keys optional; `Config` supplies the defaults below, so no
@@ -82,8 +80,8 @@
     # prompt section itself. Host-layer row: on the CLI/TUI profile it is the
     # replacement (tool-fs above is disabled); on the web profile it lands in
     # the global tool layer, visible to any agent whose preset does not mount
-    # the stock tool-fs (see the shipped `standard-rw` preset in
-    # agent-presets/standard-rw/).
+    # the stock tool-fs (see the `standard-rw` preset the preset-selection
+    # section below selects).
     - id: tool-read-write
       name: '@dsh-plugin/dsh-tool-read-write'
 
@@ -99,13 +97,58 @@
         immuneTurns: 3
         syncBacklog: 0
 
-    # Mode-status Web UI: host projection units (compactMode/vibeMode/
-    # advisorStatus/wechatChannel) + browser badges in the session header's
+    # Orchestrator: the coordinator suite's review loop + recursive fan-out.
+    # `subtask_parallel` dispatches N independent sub-tasks concurrently over the
+    # shared dsh-worker-spawn base, behind three gates (`maxDepth`,
+    # `maxTotalAgents`, and the `fanOut` heuristics). The review loop is a
+    # customized goal CARRIED BY A DISPOSABLE REVIEW-WORK SUBAGENT (never by the
+    # coordinator's own session): each round dispatches fresh one-shot clean
+    # reviewers (read-only, composed by dsh-advisor's shared reviewer helper),
+    # the verdict is the numeric count of accepted P0 findings, and the two exits
+    # are zero-P0 → implement/verify → complete+report, and a human decision →
+    # `goal.block` → wait → `goal.resume`.
+    #
+    # REQUIRES the goal stack (`goal`, `goal-round-driver`, `tool-goal`) and
+    # `session-projection` to stay mounted — `ctx.goals` hard-depends on the
+    # projection registry, exactly like `token-meter` (see the base-layer
+    # invariants note above). Every key below is the plugin default; the
+    # remaining knobs (`workerSpawn.provider/tiers/maxConsecutiveWakes`,
+    # `workerTimeoutMs`, `reviewTimeoutMs`, `maxGoalRounds`) keep their defaults.
+    - id: orchestrator
+      name: '@dsh-plugin/dsh-orchestrator'
+      config:
+        reviewersPerRound: 3            # clean reviewers dispatched per round
+        reviewerTools: [read, grep, glob]  # read-only envelope for those reviewers
+        zeroP0Approach: 'count'         # numeric verdict, never a model's feeling
+        fanOut:                         # the three recursive fan-out gates
+          maxDepth: 3
+          maxTotalAgents: 20
+          minSubtasks: 2
+          minEffortTokens: 2000
+
+    # Mode-status Web UI: host projection units (compactMode/advisorStatus/
+    # wechatChannel) + browser badges in the session header's
     # utilities band. All-default config; the client face is picked up from
     # this row's package declaration (`dsh.client` + `exports["./client"]`).
     - id: mode-ui
       name: '@dsh-plugin/dsh-mode-ui'
       config: {}
+
+    # Review gate (`--review`): keeps every tool and fences only the WRITE
+    # PATH. While a task awaits the user's plan approval, write/edit against
+    # `protectedPaths` asks for approval through ctx.approval, the session
+    # sandbox is tightened to `draftSandboxMode` at most (bash has no
+    # path-level fence — that mode is the only lever), and the plan's scratch
+    # dir stays writable. The flags are stripped at the user-input boundary;
+    # the state rides the durable `review-gate/state` event and the
+    # `reviewGate` projection. Every key below is the plugin default.
+    - id: review-gate
+      name: '@dsh-plugin/dsh-review-gate'
+      config:
+        protectedPaths: ['**/src/**', '**/*.ts', '**/*.tsx']
+        scratchDir: '.dsh-plans'
+        defaultPolicy: 'off'            # 'on' = every task starts behind the fence
+        draftSandboxMode: 'workspace-write'  # '' = leave the session sandbox alone
 
     # WeChat (Tencent iLink) channel. Deliberately DISABLED for now — hermes
     # keeps the account (same iLink bot account is mutually exclusive; the
@@ -118,22 +161,133 @@
       config:
         enabled: false
 
+    # Asynchronous question inbox: durable `question/*` session events folded
+    # into the `questionBoard` projection, the global `ask_question` tool, the
+    # `ctx.questionBoard` service, and the panel's `/answer_question` /
+    # `/dismiss_question` commands. Hard-injects `sessionProjections` (the
+    # base bundle mounts `session-projection`, so no extra row is needed). All
+    # default config. The Web face (`lib/client.js`, declared via dsh.client)
+    # registers the `question-board` ConversationNode + its keyed renderer, so
+    # the built bundle must exist before boot (design §5.4).
+    - id: question-board
+      name: '@dsh-plugin/dsh-question-board'
+      config: {}
+
+    # Rule layer (design §5.8 / §13.4), two deliberately separate halves.
+    # Advisory: `advisoryFiles` are read once at mount and rendered as one
+    # `rules:advisory` system-prompt section in the persona band (order 0),
+    # registered with `interpolate: false` so literal braces in a rule file
+    # survive. A missing file is skipped with a warning, so this row is safe
+    # before `$DSH_HOME/AGENTS.md` / `$DSH_HOME/persona.md` exist.
+    # Gate: `gateRules` become per-call approval gates (`tools/pre-execute`
+    # listener + the `ctx.rules` service that review-gate/org consume). Empty
+    # by default — the profile ships no protected paths of its own; add
+    # `gateRules: [{ tool: write, paths: ['src/**'] }]` to arm it.
+    - id: rules
+      name: '@dsh-plugin/dsh-rules'
+      config: {}
+
+    # Task board (design §5.2 / §13.3): the coordinator's persistent
+    # requirement-level ledger plus its attention work set. Durable `task/*`
+    # events (whole-value snapshots, revision compare-and-set, replayable close
+    # tombstones) fold into the `taskBoard` projection; the global
+    # `task_new`/`task_update`/`task_close`/`task_reopen`/`task_list` tools are
+    # granted per role through `tools.restrict({ allow: [...] })`; `ctx.taskBoard`
+    # is the service. The `task-board/work-set` prompt section renders the
+    # `inContext` task subjects under `maxContextBytes`, and a `tools/result`
+    # observer completes `in_progress` tasks only when a successful result
+    # carries one of `autoCloseSignals` (conservative: anything else waits for
+    # the user). Values below are the plugin defaults. The browser half — this
+    # row's package declaration (`dsh.client` + `exports["./client"]`) — adds
+    # the `/task` command and the task-board chat node: the work set plus the
+    # full ledger, per-row close/reopen and work-set checkbox, all driven
+    # through `ctx.remote.commands`. NOTE: the `task/*` event
+    # names must be in the harness persistence catalog for a session that used
+    # them to reload — the same out-of-repo event-annex step the mode events
+    # (`compact/mode`, …) needed; without it, resume refuses the log.
+    - id: task-board
+      name: '@dsh-plugin/dsh-task-board'
+      config:
+        maxContextBytes: 2000            # work-set prompt section budget (UTF-8 bytes)
+        autoCloseSignals: [test-passed]  # [] disables auto-close entirely
+
 # ── web preset selection ────────────────────────────────────────────────────
 #
-# On the WEB profile the model-facing fs tools are mounted per-agent by agent
-# presets (the web-app bundle disables the host `tool-fs` row), so the read/write
-# replacement needs a preset that does NOT mount the stock tool-fs. The roster
-# root for locally authored presets is `$DSH_HOME/.agent-presets` (the shipped
-# root is read-only and `apps/cli/src/profile-boot.ts` pins the roster's
-# `roots` to it — a patch cannot add a root), so the profile SHIPS the
-# ready-made `standard-rw` preset in `agent-presets/standard-rw/` and you copy
-# it into the user root (exact command in README "web preset step"). Once it
-# exists, this row makes every NEW web session use it: the CLI composes the
-# agent-presets config from the bundle/patch layers and only overrides `roots`,
-# so a patch-set `default` survives. A session created before the preset is
-# installed fails loud at resolution with the available ids — the same
-# fail-loud contract as the wechat config validation.
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
+# `@deepseek-ai/dsh-agent-preset-registry` — 0.2.0-rc.2's rename of the removed
+# `@deepseek-ai/dsh-agent-presets` package and of the web-app row that mounts
+# it (row id `agent-preset-registry`) — picks the preset every NEW web session
+# starts on. Its Config carries `default` plus the volatile `selectedDefault`
+# the Web editor writes back.
+#
+# 0.2.0-rc.2 replaced the preset ROSTER with preset DECLARATIONS: the
+# `$DSH_HOME/.agent-presets/<id>/` directory is no longer read by anything, and
+# a preset is now a row of `@deepseek-ai/dsh-agent-preset` (config
+# `{id, name, description, order, plugins}`) mounted from a bundle or a patch
+# layer, exactly like the shipped `standard`/`ptc`/`minimal`/`cordis` rows in
+# the web-app bundle. A preset id nobody declares fails loud at session
+# creation, listing the available ids — the same fail-loud contract as the
+# wechat config validation.
+#
+# NOTE — migration gap (does not block the 0.2.0-rc.2 dependency baseline, does
+# block a web boot): no row declares `standard-rw` yet, so this `default`
+# currently resolves to nothing. `profiles/main/agent-presets/standard-rw/` is
+# inert under 0.2.0-rc.2. Re-author it as a declaration row — `id` from the
+# directory name, `name`/`description`/`order` from `preset.yml`, `plugins` from
+# `agent.cordis.yml` verbatim, every plugin name re-checked against the
+# 0.2.0-rc.2 inventory (renames fail at activation) — in the plugin migration
+# wave, or point `default` at a shipped preset.
+- id: agent-preset-registry
+  name: '@deepseek-ai/dsh-agent-preset-registry'
   config:
     default: standard-rw
+
+# ── coordinator suite: session org + peers ───────────────────────────────────
+#
+# `dsh-peers` owns the peer channel: the durable `peer/message` event (appended
+# to the TARGET session's log — that log IS the inbox), the `ctx.peers` send/
+# list service with the self-built `senderId+messageId` dedup key, and the
+# global `peer_send` tool. It is a separate package because the channel is
+# meaningful without any org: any two live sessions may address each other.
+#
+# `dsh-org` owns the role model on top of it: the durable `org/*` events
+# (`claim`/`relinquish`/`forbid`/`role`, plus `assign`/`notice`) folded into
+# `ctx.org` and the `org` projection, the `/org on|off|claim|relinquish|
+# forbid|list` command family, and the mechanism-enforced role capability
+# envelope (tools.restrict allow-mask + scoped role tools + ONE
+# tools/pre-execute path gate per role). Mount `peers` BEFORE `org`: the org
+# envelope's allow-list is intersected with the tool names actually present,
+# so `peer_send` must already be registered for a coordinator to receive it.
+#
+# Anchored at EOF (after the preset rows) to keep this insert clear of the
+# other coordinator-suite rows' anchors.
+- insert:
+    # Peer channel. `wakeupEnabled: false` degrades every delivery to
+    # inbox-only (quiet) without changing the tool surface — useful when the
+    # target's turns must only ever start from human input.
+    - id: peers
+      name: '@dsh-plugin/dsh-peers'
+      config:
+        wakeupEnabled: true
+        maxContentBytes: 16384
+
+    # Session hierarchy. `handoffDir` is the one place a secretary may write
+    # (the long task brief that a lead reads back); `secretaryBash: false` is
+    # the deliberate hard guarantee behind "secretary cannot read code text":
+    # bash has no path argument, so leaving it unmasked is the documented
+    # best-effort gap (see doc/VERIFY-PATH-RESTRICT.md §4c). Set
+    # `secretaryBash: true` only when the secretary needs shell exploration,
+    # accepting that the read gradient becomes advisory. `strictTakeover:
+    # true` re-asks the human (via `ctx.approval`) before a model-initiated
+    # takeover of an existing session.
+    #
+    # The package also declares `dsh.client` + `exports["./client"]`, so this
+    # row doubles as a web boot entry: client-modules serves the org panel
+    # bundle (org 投影 → `conversation.input.dock`, 见 README「dsh-org 的组织面板」).
+    # Build it (`pnpm --filter @dsh-plugin/dsh-org run build`) before a boot —
+    # a missing lib/client.js fails loud at composition.
+    - id: org
+      name: '@dsh-plugin/dsh-org'
+      config:
+        handoffDir: '.dsh-handoff'
+        secretaryBash: false
+        strictTakeover: false

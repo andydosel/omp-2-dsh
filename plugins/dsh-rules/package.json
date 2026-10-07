@@ -1,0 +1,68 @@
+{
+  "name": "@dsh-plugin/dsh-rules",
+  "description": "Rule layer for the DeepSeek Harness coordinator suite: advisory rule files mounted as one high-priority system-prompt section (read at load), plus gate rules turned into per-call approval gates on `tools/pre-execute`. Reminder rules are prompt-level; only gate rules are mechanically enforced.",
+  "version": "0.1.0-rc.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./config": {
+      "types": "./lib/config.d.ts",
+      "default": "./lib/config.js"
+    },
+    "./advisory": {
+      "types": "./lib/advisory.d.ts",
+      "default": "./lib/advisory.js"
+    },
+    "./gate": {
+      "types": "./lib/gate.d.ts",
+      "default": "./lib/gate.js"
+    },
+    "./glob": {
+      "types": "./lib/glob.d.ts",
+      "default": "./lib/glob.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib"
+  ],
+  "engines": {
+    "node": ">=24",
+    "dsh": "^0.2.0-rc.2"
+  },
+  "dsh": {
+    "manifestVersion": 1
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

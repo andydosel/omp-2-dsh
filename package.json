@@ -2,12 +2,12 @@
   "name": "omp-2-dsh",
   "version": "0.1.0",
   "private": true,
-  "description": "Out-of-tree DeepSeek Harness plugin suite (omp ports): tree-engine, compact-mode, vibe-mode, tool-read-write, advisor, channel-wechat, mode-ui, plus release/profile/doc tooling.",
+  "description": "Out-of-tree DeepSeek Harness plugin suite (omp ports): worker-spawn, tree-engine, compact-mode, tool-read-write, advisor, channel-wechat, mode-ui, plus release/profile/doc tooling.",
   "workspaces": [
     "plugins/*"
   ],
   "scripts": {
-    "build": "pnpm --filter @dsh-plugin/tree-engine run build && pnpm --filter @dsh-plugin/dsh-compact-mode run build && pnpm --filter @dsh-plugin/dsh-vibe-mode run build && pnpm --filter @dsh-plugin/dsh-tool-read-write run build && pnpm --filter @dsh-plugin/dsh-advisor run build && pnpm --filter @dsh-plugin/dsh-channel-wechat run build && pnpm --filter @dsh-plugin/dsh-mode-ui run build",
+    "build": "pnpm --filter @dsh-plugin/dsh-worker-spawn run build && pnpm --filter @dsh-plugin/tree-engine run build && pnpm --filter @dsh-plugin/dsh-compact-mode run build && pnpm --filter @dsh-plugin/dsh-tool-read-write run build && pnpm --filter @dsh-plugin/dsh-advisor run build && pnpm --filter @dsh-plugin/dsh-channel-wechat run build && pnpm --filter @dsh-plugin/dsh-mode-ui run build && pnpm --filter @dsh-plugin/dsh-review-gate run build && pnpm --filter @dsh-plugin/dsh-question-board run build && pnpm --filter @dsh-plugin/dsh-rules run build && pnpm --filter @dsh-plugin/dsh-peers run build && pnpm --filter @dsh-plugin/dsh-org run build && pnpm --filter @dsh-plugin/dsh-task-board run build && pnpm --filter @dsh-plugin/dsh-orchestrator run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "release": "powershell -ExecutionPolicy Bypass -File scripts/release.ps1"

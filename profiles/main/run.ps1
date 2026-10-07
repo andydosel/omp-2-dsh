@@ -1,7 +1,7 @@
 # run.ps1 — build the dsh-plugin projects in dependency order, install them
 # into the web profile (package-name resolution for the client bundles), then
-# boot the DeepSeek Harness web profile with the compact-mode + vibe-mode
-# overlay.
+# boot the DeepSeek Harness web profile with the compact-mode + read/write +
+# advisor + mode-ui overlay.
 #
 # Usage (from anywhere):
 #   powershell -ExecutionPolicy Bypass -File run.ps1            # default boot
@@ -14,7 +14,7 @@
 # (e.g. --dump-config, app flags) is forwarded verbatim.
 #
 # -Fast: the daily/lean path. Skips the build of any plugin whose built host
-# entry (and client bundle, for the two client-faced plugins) is already newer
+# entry (and client bundle, for the client-faced plugins) is already newer
 # than its source, and skips `dsh plugin --profile web add` for any plugin
 # already resolvable from the web profile node_modules. With everything fresh it
 # falls through to a single boot — the same "no build / no install" outcome as
@@ -25,9 +25,10 @@
 # install step runs `dsh plugin --profile web add <abs path>` (the official
 # pnpm forwarder), which adds each package as a hoisted `link:` dependency in
 # ~/.dsh/profiles/web — the same anchor client-modules uses to resolve
-# `dsh.client` packages. mode-ui's client bundle (lib/client.js) must exist
-# BEFORE the boot or client-modules raises MissingClientBundleError; the
-# negative-cache rule means declaration/name changes require a restart.
+# `dsh.client` packages. Each client-faced plugin's bundle (lib/client.js —
+# mode-ui, dsh-org, dsh-task-board, dsh-question-board) must exist BEFORE the
+# boot or client-modules raises MissingClientBundleError; the negative-cache
+# rule means declaration/name changes require a restart.
 param(
     [string]$DshRoot = 'C:\Users\Vantage_XLST\Documents\dsh',
     [switch]$Fast
@@ -110,15 +111,19 @@ if (-not (Test-Path $DshRoot)) {
     throw "dsh monorepo not found at $DshRoot (pass -DshRoot <path>)"
 }
 
-# Build order matters: compact-mode depends on tree-engine via workspace:*;
-# mode-ui's typecheck reads the sibling libs' built declarations; the other
-# plugins are standalone. All seven must be built before the boot (the patch
-# rows resolve by package name and the client bundles must exist).
+# Build order matters: worker-spawn is the worker-dispatch base; compact-mode
+# depends on tree-engine via workspace:*; orchestrator depends on advisor +
+# worker-spawn; mode-ui's typecheck reads the sibling libs' built declarations;
+# the other plugins are standalone. All 14 packages must be built before the boot
+# (the patch rows resolve by package name and the client bundles must exist).
 $plugins       = @(
-    'dsh-tree-engine', 'dsh-compact-mode', 'dsh-vibe-mode',
-    'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat', 'dsh-mode-ui'
+    'dsh-worker-spawn', 'dsh-tree-engine', 'dsh-compact-mode',
+    'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat',
+    'dsh-mode-ui', 'dsh-review-gate', 'dsh-question-board',
+    'dsh-task-board', 'dsh-rules', 'dsh-peers', 'dsh-org',
+    'dsh-orchestrator'
 )
-$clientPlugins = @('dsh-vibe-mode', 'dsh-mode-ui')
+$clientPlugins = @('dsh-mode-ui', 'dsh-org', 'dsh-task-board', 'dsh-question-board')
 
 # -Fast only rebuilds a plugin when it is actually stale; otherwise fall through.
 $buildPlan = @()

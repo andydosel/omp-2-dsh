@@ -5,7 +5,7 @@
 #   1. Copies each @dsh-plugin/<name> package into
 #      ~/.dsh/profiles/web/node_modules/@dsh-plugin/<name> so the Cordis loader
 #      and client-modules resolve every patch row BY PACKAGE NAME (including the
-#      built lib/client.js bundle for the two client-faced plugins).
+#      built lib/client.js bundle for the client-faced plugins).
 #   2. Copies agent-presets/standard-rw -> ~/.dsh/.agent-presets/standard-rw.
 #   3. Stages cordis.patch.yml at ~/.dsh/dsh-suite/cordis.patch.yml so start.ps1
 #      can reference a stable --patch path.
@@ -76,11 +76,19 @@ New-Item -ItemType Directory -Force -Path $pluginsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $presetDir  | Out-Null
 New-Item -ItemType Directory -Force -Path $suiteState | Out-Null
 
+# These are the INSTALLED directory names = the package name minus the
+# `@dsh-plugin/` scope, i.e. exactly the `@dsh-plugin/<name>/` folders inside the
+# zip. The Cordis loader imports each row BY PACKAGE NAME from the profile's
+# node_modules, so the folder name must match the package name (note:
+# `tree-engine`, whose repo dir is `dsh-tree-engine`, ships as `tree-engine/`).
 $plugins       = @(
-    'dsh-tree-engine', 'dsh-compact-mode', 'dsh-vibe-mode',
-    'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat', 'dsh-mode-ui'
+    'dsh-worker-spawn', 'tree-engine', 'dsh-compact-mode',
+    'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat',
+    'dsh-mode-ui', 'dsh-review-gate', 'dsh-question-board',
+    'dsh-task-board', 'dsh-rules', 'dsh-peers', 'dsh-org',
+    'dsh-orchestrator'
 )
-$clientPlugins = @('dsh-vibe-mode', 'dsh-mode-ui')
+$clientPlugins = @('dsh-mode-ui', 'dsh-org', 'dsh-task-board', 'dsh-question-board')
 
 # ── 1) copy each plugin package into the web profile node_modules ───────────
 Write-Host "==> install plugins into $pluginsDir"

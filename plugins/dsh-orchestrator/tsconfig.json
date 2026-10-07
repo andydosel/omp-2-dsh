@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@dsh-plugin/dsh-worker-spawn": ["../dsh-worker-spawn/lib/index.d.ts"],
+      "@dsh-plugin/dsh-worker-spawn/types": ["../dsh-worker-spawn/lib/types.d.ts"],
+      "@dsh-plugin/dsh-worker-spawn/workers": ["../dsh-worker-spawn/lib/workers.d.ts"],
+      "@dsh-plugin/dsh-advisor/reviewer": ["../dsh-advisor/lib/reviewer.d.ts"]
+    },
+    "rootDir": "src",
+    "outDir": "lib"
+  },
+  "include": ["src"]
+}

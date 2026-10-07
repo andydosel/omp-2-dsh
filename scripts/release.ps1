@@ -2,8 +2,9 @@
 # one GitHub-Release-ready zip asset (dsh-suite-<version>.zip).
 #
 # WHY a zip at all: dsh loads plugins BY PACKAGE NAME from the profile dir and
-# imports each plugin's built host entry (plus `lib/client.js` for the two
-# client-faced plugins: vibe-mode, mode-ui). `lib/` is gitignored in this repo,
+# imports each plugin's built host entry (plus `lib/client.js` for the
+# client-faced plugins: mode-ui, dsh-org, dsh-task-board,
+# dsh-question-board). `lib/` is gitignored in this repo,
 # so git cannot carry the built code — a GitHub Release asset is the only way a
 # consumer gets real, runnable plugins without building from source.
 #
@@ -96,13 +97,19 @@ if (-not (Test-Path (Join-Path $repoRoot 'README.md'))) {
     throw "missing README.md at the repo root (it ships inside the zip)."
 }
 
-# Build order matters: compact-mode depends on tree-engine (workspace:*), the
-# rest are standalone; vibe-mode and mode-ui additionally need lib/client.js.
+# Build order matters: worker-spawn is the worker-dispatch base; compact-mode
+# depends on tree-engine (workspace:*); orchestrator depends on advisor +
+# worker-spawn; the rest are standalone; the client-faced plugins (mode-ui,
+# dsh-org, dsh-task-board, dsh-question-board) additionally need lib/client.js.
+# `$plugins` lists the REPO directory names under plugins/ (the build targets).
 $plugins       = @(
-    'dsh-tree-engine', 'dsh-compact-mode', 'dsh-vibe-mode',
-    'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat', 'dsh-mode-ui'
+    'dsh-worker-spawn', 'dsh-tree-engine', 'dsh-compact-mode',
+    'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat',
+    'dsh-mode-ui', 'dsh-review-gate', 'dsh-question-board',
+    'dsh-task-board', 'dsh-rules', 'dsh-peers', 'dsh-org',
+    'dsh-orchestrator'
 )
-$clientPlugins = @('dsh-vibe-mode', 'dsh-mode-ui')
+$clientPlugins = @('dsh-mode-ui', 'dsh-org', 'dsh-task-board', 'dsh-question-board')
 
 Write-Host "==> dsh-suite release v$Version"
 
@@ -131,7 +138,13 @@ New-Item -ItemType Directory -Force -Path $distPlugins | Out-Null
 
 foreach ($p in $plugins) {
     $src = Join-Path $pluginRoot $p
-    $dst = Join-Path $distPlugins $p
+    # The loader imports each row BY PACKAGE NAME from the profile's
+    # node_modules/@dsh-plugin/<name>, so the shipped directory must be named by
+    # the package name, not the repo dir (tree-engine's repo dir is
+    # dsh-tree-engine, but its package name is @dsh-plugin/tree-engine).
+    $manifestSrc = ConvertTo-Hash (Get-Content (Join-Path $src 'package.json') -Raw | ConvertFrom-Json)
+    $unscoped = [string]$manifestSrc.name -replace '^@dsh-plugin/', ''
+    $dst = Join-Path $distPlugins $unscoped
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     Copy-Item -Force (Join-Path $src 'package.json') $dst
     if (Test-Path (Join-Path $src 'lib')) {
@@ -143,7 +156,7 @@ foreach ($p in $plugins) {
     Get-ChildItem -Path $dst -Recurse -Filter '*.tsbuildinfo' -File -ErrorAction SilentlyContinue | Remove-Item -Force
     # The loader imports the package's resolved entry by package name; the client
     # face needs the browser bundle. Resolve the real entry (exports["."] / main)
-    # rather than assuming a flat lib/index.js (vibe-mode and mode-ui nest it).
+    # rather than assuming a flat lib/index.js (mode-ui nests it).
     $manifest = ConvertTo-Hash (Get-Content (Join-Path $dst 'package.json') -Raw | ConvertFrom-Json)
     $entry = Resolve-PluginEntry $dst $manifest
     if (-not $entry -or -not (Test-Path $entry)) {
@@ -152,7 +165,7 @@ foreach ($p in $plugins) {
     if ($clientPlugins -contains $p) {
         if (-not (Test-Path (Join-Path $dst 'lib\client.js'))) { throw "client plugin '$p': lib/client.js missing after build" }
     }
-    Write-Host "  + @dsh-plugin/$p"
+    Write-Host "  + @dsh-plugin/$unscoped"
 }
 
 # ── 3) copy the profile overlay + preset + consumer scripts/README ──────────

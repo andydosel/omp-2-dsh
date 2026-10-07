@@ -1,0 +1,224 @@
+/**
+ * Shared tsdown preset for this package's client bundle, copied verbatim from
+ * the sibling out-of-tree plugins dsh-mode-ui / dsh-org (itself the dsh
+ * monorepo preset `packages/client/tsdown.client.ts`, MIT, adapted for the
+ * out-of-tree layout). Only {@link PACKAGE_ID} differs between the copies.
+ * Here the host half is emitted by tsc (`tsconfig.json`) directly to `lib/`,
+ * and the client face by `tsconfig.client.json` to `lib/client/src/`; tsdown
+ * emits ONLY the browser bundle (`lib/client.js`).
+ * Emits a closure-factory artifact: the bundle calls
+ * `window.__ModuleLoader__.load({id, factory})` and resolves externals
+ * through the injected require (loader module table — cordis DI entities, no
+ * globals, no import map). CSS Modules are compiled by lightningcss inside
+ * the bundle: importing `x.module.css` yields the hashed class map, and the
+ * css text auto-injects a `<style data-plugin="<id>">` tag at factory
+ * execution (the loader removes plugin-owned tags on unload).
+ */
+import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { basename, dirname, relative, resolve as resolvePath, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { UserConfig } from 'tsdown'
+import { transform } from 'lightningcss'
+
+/**
+ * The browser platform modules the shell shares into the frozen module
+ * table (mirror of `packages/client/web/src/platform.ts`, inlined so the
+ * out-of-tree preset carries no monorepo import).
+ */
+const PLATFORM_MODULES = [
+  'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives',
+  '@deepseek-ai/dsh-client-ui-dockkit',
+] as const
+
+/**
+ * Virtual-id wrapper keeping module CSS away from tsdown's own css pipeline
+ * (which requires @tsdown/css). The suffix matters: tsdown's guard matches ids
+ * ending in `.css`, so the virtual id must not.
+ */
+const CSS_VIRTUAL_PREFIX = '\0dsh-css:'
+const CSS_VIRTUAL_SUFFIX = '.mjs'
+
+/**
+ * Wire/type layers a client bundle may inline: browser-safe contracts
+ * with no runtime identity to share (no Symbol/instanceof/singleton state).
+ * Everything else under @deepseek-ai/* is either a module-table entry
+ * (external) or a leak the purity gate rejects.
+ */
+const INLINE_SAFE = /^@deepseek-ai\/dsh-(host-apiproxy|session|llm|tools|brand)(\/|$)/
+
+/**
+ * Vendored framework libraries: rescoped into @deepseek-ai, so the gate below
+ * would read them as plugin packages. They carry no cross-plugin runtime
+ * identity to share — the framework itself is a platform module (external),
+ * while these are ordinary libraries a browser bundle inlines.
+ */
+const VENDORED_LIBRARY = /^@deepseek-ai\/(cosmokit|schemastery)(\/|$)/
+
+/** Generated descriptor/codec contribution with no shared runtime identity. */
+const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
+
+/**
+ * Externals resolved from the loader module table: the platform seed entries
+ * themselves. 0.2.0-rc.2 deleted the `@deepseek-ai/dsh-client-runtime/client`
+ * preload (`PRELOADED_CLIENT_EXTERNALS` is empty upstream now), so the table is
+ * exactly `PLATFORM_MODULES` — no exemption rides along.
+ */
+export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES]
+
+/** Package id stamped into the __ModuleLoader__.load handoff. */
+export const PACKAGE_ID = '@dsh-plugin/dsh-question-board'
+
+const REPOSITORY_ROOT = fileURLToPath(new URL('../..', import.meta.url))
+
+/** Rebase a physical lib-relative source onto a browser URL that mirrors the repository directories. */
+function browserSourcePath(source: string, sourcemapPath: string): string {
+  if (!source.startsWith('.')) return source
+  const physicalSource = resolvePath(dirname(sourcemapPath), source)
+  const repositoryPath = relative(REPOSITORY_ROOT, physicalSource).split(sep).join('/')
+  return repositoryPath.startsWith('packages/') ? `../../../${repositoryPath}` : source
+}
+
+/**
+ * Build the tsdown config for this package: the host-half lib build is tsc's
+ * job (emitted to `lib/src/`); tsdown emits only the browser client bundle
+ * from the tsc-emitted client JS (`lib/client/src/index.js`), or from the
+ * source when no build face is selected (local single-package development).
+ */
+export function clientBundle(): (inlineConfig: Pick<UserConfig, 'env'>) => UserConfig[] {
+  return ({ env }) => {
+    const face = buildFace(env?.DSH_BUILD_FACE)
+    return [clientConfig(PACKAGE_ID, face === undefined
+      ? 'client/src/index.ts'
+      : 'lib/client/src/index.js')]
+  }
+}
+
+type BuildFace = 'host' | 'client' | undefined
+
+function buildFace(value: unknown): BuildFace {
+  if (value === undefined || value === 'host' || value === 'client') return value
+  throw new Error(`tsdown: --env.DSH_BUILD_FACE must be host or client, received ${String(value)}`)
+}
+
+function clientConfig(id: string, entry: string): UserConfig {
+  return {
+    name: `${id}/client`,
+    entry: { client: entry },
+    // Browser bundle lands next to the host half (single lib/ artifact dir;
+    // the entryFileNames pin keeps it exactly lib/client.js). clean must stay
+    // off — a default clean would wipe the tsc-emitted host output.
+    outDir: 'lib',
+    format: 'cjs',
+    platform: 'browser',
+    // Types ship from lib/client/src (tsc); dts here would wrap the banner/footer into .d.cts and break parsing.
+    dts: false,
+    // Plugin code is fetched outside Vite's module graph, so its own bundle
+    // must carry the TS/TSX mapping consumed by browser profiling tools.
+    sourcemap: true,
+    clean: false,
+    external: [...CLIENT_EXTERNALS],
+    // Browser bundles inline node-idiom deps (zustand/immer read
+    // process.env.NODE_ENV; zustand's esm build also probes
+    // import.meta.env.MODE, which a CJS output cannot carry — rolldown flags
+    // EMPTY_IMPORT_META). vite defined both on the seed path; tsdown inlining
+    // needs the substitutions here or the factory throws ReferenceError at
+    // boot / the build gate reds. Both keys honor the build's NODE_ENV so a
+    // dev build keeps the dev-branch semantics; artifacts default to production.
+    // The bare `import.meta.env` key is required alongside the precise MODE
+    // key: zustand probes `import.meta.env ? import.meta.env.MODE : ...`, and
+    // the truthiness probe would otherwise survive as an empty import.meta.
+    define: {
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+      'import.meta.env.MODE': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+      'import.meta.env': JSON.stringify({ MODE: process.env.NODE_ENV ?? 'production' }),
+    },
+    // tsdown auto-externalizes package dependencies; anything NOT in the
+    // loader module table must inline instead (wire/type layers, zod, clsx —
+    // every non-shared dep). A require() the table cannot answer is a
+    // guaranteed runtime throw, so the rule is the table list itself: no
+    // opinion for table entries (external above wins), bundle everything else.
+    noExternal: (id: string) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
+    plugins: [{
+      // Bundle purity gate (build-time mirror of the module-edge rules):
+      // platform seed entries stay external, inline-safe wire layers inline,
+      // and every other @deepseek-ai value import is a build error — a
+      // cross-plugin value import either inlines a duplicate runtime instance
+      // or requires a specifier the frozen module table cannot answer.
+      // Cross-plugin collaboration goes through cordis services instead.
+      name: 'dsh-client-bundle-purity',
+      resolveId(source: string) {
+        if (!source.startsWith('@deepseek-ai/')) return null
+        if (CLIENT_EXTERNALS.includes(source)) return null // platform module: external wins
+        if (VENDORED_LIBRARY.test(source)) return null // vendored library: inline, no shared identity
+        if (INLINE_SAFE.test(source) || GENERATED_REMOTE.test(source)) return null // wire contribution: inline is the point
+        throw new Error(
+          `client bundle purity: "${source}" is not a platform module (CLIENT_EXTERNALS), an inline-safe wire layer, or a generated /remote contribution — `
+          + 'cross-plugin value imports are forbidden; collaborate through cordis services (type-only imports are erased and never reach this gate)',
+        )
+      },
+    }, {
+      name: 'dsh-css-modules-inline',
+      resolveId(source: string, importer: string | undefined) {
+        if (!source.endsWith('.module.css')) return null
+        const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
+        return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
+      },
+      async load(virtualId: string) {
+        if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
+        const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+        // The virtual id otherwise hides the physical stylesheet from Rolldown's watch graph.
+        this.addWatchFile(fileId)
+        const source = await readFile(fileId)
+        const { code, exports: cssExports } = transform({
+          filename: fileId,
+          code: source,
+          cssModules: { pattern: '[hash]_[local]' },
+          minify: true,
+        })
+        const classMap: Record<string, string> = {}
+        for (const [local, exp] of Object.entries(cssExports ?? {})) classMap[local] = exp.name
+        // One <style data-plugin> per module file; idempotent under re-evaluation.
+        return [
+          `const css = ${JSON.stringify(code.toString())};`,
+          `const tagId = ${JSON.stringify(`${id}/${basename(fileId)}`)};`,
+          'if (typeof document !== \'undefined\' && document.querySelector(\'style[data-plugin-css=\' + JSON.stringify(tagId) + \']\') === null) {',
+          '  const tag = document.createElement(\'style\');',
+          `  tag.dataset.plugin = ${JSON.stringify(id)};`,
+          '  tag.dataset.pluginCss = tagId;',
+          '  tag.textContent = css;',
+          '  document.head.appendChild(tag);',
+          '}',
+          `export default ${JSON.stringify(classMap)};`,
+        ].join('\n')
+      },
+    }],
+    outputOptions: {
+      entryFileNames: 'client.js',
+      // The map is served from /plugins/<scoped-package>/client.js.map. The
+      // browser resolves its local sources back into URLs that mirror the
+      // package source directories; sourcesContent keeps them usable
+      // without exposing that tree as an HTTP route.
+      sourcemapPathTransform: browserSourcePath,
+      banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(id)}, factory: (require) => {`,
+      footer: 'return module.exports; } });',
+      intro: 'var module = { exports: {} }; var exports = module.exports;',
+    },
+  }
+}
+
+/** Resolve an emitted JS asset import against its source-tree counterpart. */
+function sourceAssetPath(source: string, importer: string): string {
+  const emitted = resolvePath(dirname(importer), source)
+  if (existsSync(emitted)) return emitted
+  // tsc emits from the package root (rootDir ".") into lib/<rel>; the source
+  // tree counterpart is <rel> (client/src/..., src/...).
+  const prefix = `${sep}lib${sep}`
+  const boundary = emitted.indexOf(prefix)
+  if (boundary < 0) return emitted
+  const candidate = resolvePath(emitted.slice(0, boundary), emitted.slice(boundary + prefix.length))
+  return existsSync(candidate) ? candidate : emitted
+}
