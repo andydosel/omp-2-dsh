@@ -1,10 +1,10 @@
-# 设计文档 v1.0:随行协调者套件(秘书/负责人/任务板/交枪门禁/问题面板/会话通信)
+# 实现设计:随行协调者套件(秘书/负责人/任务板/交枪门禁/问题面板/会话通信)
 
 > 状态:**设计定稿**(拍板点均已确认;三方评审修正已并入;悬而未决见 §7.4)
 > 基线:dsh master 本地 clone `C:/Users/Vantage_XLST/Documents/dsh`(纯参考)
 > 开发:`C:/Users/Vantage_XLST/Documents/omp-2-dsh`(现有 7 插件工作区)
 > 原则:一切以插件形式实现;涉及核心改动或非插件实现先提醒用户
-> 依据:本仓库现有插件(vibe-mode/advisor/compact-mode/tool-read-write/mode-ui);dsh 侧调研见 `RESEARCH-*`;本文与 `DESIGN-ADVISOR-V1.0.md` 同构
+> 依据:本仓库现有插件(advisor/compact-mode/tool-read-write/mode-ui);需求分析见 `REQUIREMENTS-COORDINATOR-SUITE.md`;本文与 `DESIGN-ADVISOR-V1.0.md` 同构
 > 本文是**新方案**,在现状之上**追加**,不改动现有 7 插件的既有语义。
 
 ---
@@ -35,9 +35,9 @@
 
 ---
 
-## 1. 需求(从痛点转来)
+## 1. 需求(摘要)
 
-现有套件已解决:DIRECTOR 调度 + worker、审阅树压缩、omp 风格工具、评审 advisor、模式 UI。**缺口**在"随行长活协调"和"人机语义":
+完整需求分析见 `REQUIREMENTS-COORDINATOR-SUITE.md`(痛点、迁移需求、新套件需求、角色权限需求)。下表为快速摘要:
 
 | # | 痛点(你原话/访谈提炼) | 转换为需求 |
 |---|---|---|

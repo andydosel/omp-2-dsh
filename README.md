@@ -5,8 +5,8 @@
 作为**独立 `@dsh-plugin/*` 包**附加到 DeepSeek Harness(dsh),**不改动 dsh 核心**。
 所有插件在启动时经由 cordis 覆盖层(`--patch`)加载,按**包名**从 dsh profile 目录解析。
 
-- **对齐 dsh 版本:`0.1.1-rc.2`**(所有 `@deepseek-ai/dsh-*` 依赖与 `cordis@4.0.1` 已按该版本
-  reconcile)。**不要**装成 `0.1.2-rc.1`/latest,见「dsh 版本对齐说明」。
+- **对齐 dsh 版本:`0.2.0-rc.2`**(所有 `@deepseek-ai/dsh-*` 依赖与 `cordis@4.0.4` 已按该版本
+  reconcile)。**不要**装成 `0.2.1-alpha.1`/latest,见「dsh 版本对齐说明」。
 - 每个插件的 git 历史通过 `git subtree` 完整保留(见各 `plugins/*` 目录)。
 - 除 13 个插件外还有一个**纯库包** `@dsh-plugin/dsh-worker-spawn`(目录 `plugins/dsh-worker-spawn`):
   无插件入口、无 Context key,**不进 profile 挂载**;它是 `orchestrator`(`subtask_parallel`)
@@ -47,10 +47,10 @@
    (`tool-read-write`、`channel-wechat`)要求 **≥24**,所以请装 Node 24+。
 2. **dsh CLI(版本钉住)**:
    ```powershell
-   npm i -g @deepseek-ai/dsh@0.1.1-rc.2
+   npm i -g @deepseek-ai/dsh@0.2.0-rc.2
    ```
-   > 本套件对齐 `0.1.1-rc.2`。**不要**只写 `npm i -g @deepseek-ai/dsh`(那会装成 npm `latest`,
-   > 目前是 `0.1.2-rc.1`,与本套件不兼容,见「dsh 版本对齐说明」)。
+   > 本套件对齐 `0.2.0-rc.2`。**不要**只写 `npm i -g @deepseek-ai/dsh`(那会装成 npm `latest`,
+   > 目前是 `0.2.1-alpha.1`,与本套件不兼容,见「dsh 版本对齐说明」)。
    > 也可以用本地 dsh monorepo(见「给开发者/贡献者」),但**终端用户推荐装已发布 CLI**。
 3. **`DEEPSEEK_API_KEY` 环境变量**(发起真实模型请求必需):
    ```powershell
@@ -157,10 +157,10 @@ zip 里的插件只带 `package.json + lib/**`,**不带 `node_modules`**;它们 
 `@deepseek-ai/dsh-*` 等运行时依赖如何解析?—— dsh 每次启动都会维护
 `$DSH_HOME/profiles/node_modules/` 的**依赖闭包**(对称链接已安装 dsh 的所有
 `dependencies`/`peerDependencies`),Node 从任何 profile 向上查找会命中该目录。所以
-**只要装的是对齐版本的 dsh CLI(`0.1.1-rc.2`),这些依赖就自动满足,不需要 pnpm install。**
+**只要装的是对齐版本的 dsh CLI(`0.2.0-rc.2`),这些依赖就自动满足,不需要 pnpm install。**
 
 > **排错**:若启动报 `Cannot find module '@deepseek-ai/dsh-*'`,几乎总是**dsh 版本不匹配**
-> (装成了 `0.1.2-rc.1`/latest)。请重装:PowerShell `npm i -g @deepseek-ai/dsh@0.1.1-rc.2`;
+> (装成了 `0.2.1-alpha.1`/latest)。请重装:PowerShell `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`;
 > 然后**完整重启 dsh**(Loader 对解析失败的包名会缓存负面结论,旧进程不会自愈)。
 
 ---
@@ -228,10 +228,10 @@ dsh web --patch "$HOME\.dsh\dsh-suite\cordis.patch.yml" --dump-config
 
 ## dsh 版本对齐说明
 
-- 本套件所有 `@deepseek-ai/dsh-*` 依赖与 `cordis@4.0.1` 按 **`0.1.1-rc.2`** reconcile。
-- npm 上 `@deepseek-ai/dsh` 的 `latest` 目前是 **`0.1.2-rc.1`**(prerelease,含对
+- 本套件所有 `@deepseek-ai/dsh-*` 依赖与 `cordis@4.0.4` 按 **`0.2.0-rc.2`** reconcile。
+- npm 上 `@deepseek-ai/dsh` 的 `latest` 目前是 **`0.2.1-alpha.1`**(prerelease,含对
   `session.events` 的破坏性变更),本套件**未对齐它**。
-- 因此**必须** `npm i -g @deepseek-ai/dsh@0.1.1-rc.2`,不要装 latest / `0.1.2-rc.1`。
+- 因此**必须** `npm i -g @deepseek-ai/dsh@0.2.0-rc.2`,不要装 latest / `0.2.1-alpha.1`。
 - 模式状态(mode 开关、worker roster、advisor/wechat 状态)是**插件自有状态**,持久化为
   `$DSH_HOME/storages/*-state.json`,重启后 UI 仍可读。
 
