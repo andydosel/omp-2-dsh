@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin/dsh-tool-read-write",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Unified omp-style read/write tools for dsh: one read (file selectors, directories, archives, SQLite, URLs) plus write, ported edit/read_image, and inspect_image.",
   "type": "module",
   "private": true,

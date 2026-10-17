@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-task-board",
   "description": "Persistent requirement-level task ledger + attention work set for the coordinator suite (DESIGN-COORDINATOR-SUITE.md §5.2 / §13.3): durable task/* session events with revision CAS and tombstones, a `taskBoard` session projection, the coordinator-scoped task_new/task_update/task_close/task_reopen/task_list tools, ctx.taskBoard, a bounded work-set prompt section, signal-gated auto-close, the user-facing /task command, and a browser task-board node (ConversationNodeDefinition + keyed chat renderer) whose rows drive close/reopen and work-set membership.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

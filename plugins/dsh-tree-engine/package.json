@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin/tree-engine",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Standalone, dependency-free append-only tree engine (omp tree core semantics) for the dsh compact review tree.",
   "type": "module",
   "private": true,

@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin/dsh-channel-wechat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "WeChat (iLink Bot / ClawBot) channel plugin for dsh: long-poll inbound, per-peer agent sessions, chunked outbound.",
   "type": "module",
   "private": true,

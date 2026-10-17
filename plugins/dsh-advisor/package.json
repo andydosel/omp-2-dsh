@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-advisor",
   "description": "Optional reviewer model(s) attached to a session: reviews primary-transcript deltas with a restricted tool grant (read/grep/glob) and injects severity-graded advice (nit/concern/blocker). Port of omp's advisor subsystem for the DeepSeek Harness.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

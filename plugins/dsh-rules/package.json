@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-rules",
   "description": "Rule layer for the DeepSeek Harness coordinator suite: advisory rule files mounted as one high-priority system-prompt section (read at load), plus gate rules turned into per-call approval gates on `tools/pre-execute`. Reminder rules are prompt-level; only gate rules are mechanically enforced.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

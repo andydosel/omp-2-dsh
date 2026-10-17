@@ -88,12 +88,12 @@ dsh CLI 自动满足**(见「从 Release 安装」第 3 步末的依赖说明)�
 ### 1. 下载并解压
 
 从 GitHub Release 下载 `dsh-suite-<version>.zip`,解压到**任意位置**。解压得到自包含目录
-`dsh-suite-0.2.0/`。
+`dsh-suite-0.2.1/`。
 
 ### 2. 解压后目录(即 zip 里的布局)
 
 ```
-dsh-suite-0.2.0/
+dsh-suite-0.2.1/
 ├── @dsh-plugin/              # 15 个预构建包(12 插件 + 3 共享库:tree-engine、dsh-worker-spawn、dsh-util;
 │   │                         #  每个目录名 = 包名去掉 @dsh-plugin/ 前缀,loader 据此按包名解析)
 │   ├── tree-engine/          ├── dsh-compact-mode/
@@ -117,7 +117,7 @@ dsh-suite-0.2.0/
 
 #### Windows(PowerShell)
 
-在解压出的 `dsh-suite-0.2.0/` 目录里运行:
+在解压出的 `dsh-suite-0.2.1/` 目录里运行:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1
@@ -141,7 +141,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 (以下以 `~/.dsh` 为 dsh home,`$DSH_HOME` 已另行设置时请替换):
 
 ```bash
-cd ~/dsh-suite-0.2.0
+cd ~/dsh-suite-0.2.1
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 
 # 1) 15 个预构建包 → web profile node_modules
@@ -278,7 +278,7 @@ pnpm run typecheck
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/release.ps1            # 读 VERSION
-powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -Version 0.2.0
+powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -Version 0.2.1
 ```
 
 产物 `release/dsh-suite-<version>.zip`;脚本只构建 + 打包,不推送 tag/创建 Release,末尾打印需

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-review-gate",
   "description": "Review gate (`--review` suffix): keeps every tool, and fences only the WRITE path — a self-built `tools/pre-execute` listener asks for approval on `write`/`edit` targeting protected source globs while a task awaits plan approval, with the session sandbox mode tightened for the un-path-fenceable `bash` surface. No model-facing tools.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin/dsh-mode-ui",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Mode-status web UI for the dsh plugin suite: always-visible session-header badges for compact / advisor / wechat state, fed by three host projection units (plan-mode badge pattern)",
   "private": true,
   "license": "MIT",

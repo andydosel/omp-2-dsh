@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-util",
   "description": "Shared, framework-free primitives for the coordinator suite: one glob engine (rules gate, review-gate fence, org path envelope), one XML escaper, and the session-id normalizer.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

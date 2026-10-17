@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-worker-spawn",
   "description": "Reusable worker-spawn core extracted from dsh-vibe-mode's DIRECTOR mode: fast/good dispatch tier routing, spawn-in-process dispatch primitives (startActivation/sendMessage/interrupt/drain), and a per-spawner WorkerRegistry with turn-precise wait semantics. Pure library — no service, no plugin entry.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

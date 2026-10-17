@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-orchestrator",
   "description": "Coordinator-suite orchestrator: a customized review-loop goal carried by a disposable review-work subagent (per-round clean one-shot reviewers composed from @dsh-plugin/dsh-advisor's shared reviewer helper, a deterministic cross-round P0 count, and the two exits zero-P0-complete / human-decision-block) plus the recursive `subtask_parallel` fan-out tool with its three gates (maxDepth / maxTotalAgents / fanOut heuristics) over the shared @dsh-plugin/dsh-worker-spawn base.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-peers",
   "description": "Peer channel between live sessions: the durable `peer/message` event appended to the TARGET session's log (that log IS the inbox), the `ctx.peers` send/list service with a self-built `senderId+messageId` dedupe key, and the global `peer_send` tool (DESIGN-COORDINATOR-SUITE.md §5.1/§5.6/§5.9/§5.10/§13.6).",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

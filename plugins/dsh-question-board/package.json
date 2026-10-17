@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-question-board",
   "description": "Asynchronous, non-blocking question inbox for the DeepSeek Harness: durable `question/*` session events folded into a per-session `questionBoard` projection, an `ask_question` tool that registers into the inbox without printing long text, a `ctx.questionBoard` service whose answers wake the asker (followup/steer) or ride along without interrupting (inject), and a Web question panel (one keyed ConversationNode per asker) whose batch answers ride the plugin's `/answer_question` / `/dismiss_question` commands.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",

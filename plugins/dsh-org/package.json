@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-org",
   "description": "Secretary/lead organisation layer for the DeepSeek Harness coordinator suite: the ctx.org service (claim/relinquish/forbid/spawnLead/assign), the durable org/* session vocabulary, the mechanism-enforced role capability envelopes (tool mask + read/write path gate), the secretary/lead role tools, and the org session projection.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "MIT",
   "type": "module",
