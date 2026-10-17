@@ -15,6 +15,7 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { escapeXml } from '@dsh-plugin/dsh-util/xml'
 import type { Severity } from './severity.ts'
 import { isInterrupting } from './severity.ts'
 
@@ -24,16 +25,6 @@ import { isInterrupting } from './severity.ts'
  * shared `{ kind: 'plugin', plugin }` vocabulary is gone.
  */
 export const ADVISOR_SOURCE_KIND = 'dsh-advisor'
-
-/** Escape one XML text/value character. */
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
 
 /**
  * Render an advisory note as the model-visible XML card delivered to the

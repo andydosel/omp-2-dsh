@@ -83,6 +83,33 @@ describe('org state fold', () => {
     expect(forbiddenOf(next, 'sec')).toEqual(['other'])
   })
 
+  it('never resurrects a forbidden edge when the target claim replays later', () => {
+    // Cross-session logs fold in arbitrary order: the secretary's forbid can
+    // land before the target's historical claim. The fold must keep the pair
+    // forbidden and leave no manager edge/lead role.
+    let state = emptyOrgState()
+    state = applyOrgEvent(state, {
+      type: 'org/forbid', seq: 0, time: 0,
+      data: { secretaryId: SessionId('sec'), targetId: SessionId('tgt') },
+    } as SessionEvent)
+    state = applyOrgEvent(state, {
+      type: 'org/claim', seq: 0, time: 0,
+      data: { secretaryId: SessionId('sec'), targetId: SessionId('tgt') },
+    } as SessionEvent)
+    expect(isForbidden(state, 'sec', 'tgt')).toBe(true)
+    expect(managerOf(state, 'tgt')).toBeUndefined()
+    expect(roleOf(state, 'tgt')).toBeUndefined()
+  })
+
+  it('folds the target-side forbidden mirror into the same forbidden set', () => {
+    const session = newSession('target')
+    session.append('org/claim', { secretaryId: SessionId('sec'), targetId: SessionId('tgt') })
+    session.append('org/forbidden', { secretaryId: SessionId('sec'), targetId: SessionId('tgt') })
+    const state = fold(session)
+    expect(isForbidden(state, 'sec', 'tgt')).toBe(true)
+    expect(managerOf(state, 'tgt')).toBeUndefined()
+  })
+
   it('is replay-idempotent and passes foreign events through by reference', () => {
     const session = newSession('sec')
     session.append('org/claim', { secretaryId: SessionId('sec'), targetId: SessionId('tgt') })

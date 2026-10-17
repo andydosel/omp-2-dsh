@@ -14,6 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { describeError } from '@dsh-plugin/dsh-util/error'
 import { applySecretaryEnvelope, disposeEnvelope } from './envelope.ts'
 import type { OrgApi, OrgDeps } from './types.ts'
 
@@ -33,7 +34,7 @@ export const ORG_USAGE = 'usage: /org [on|off|claim <id>|relinquish <id>|forbid 
  * @param invocation - the raw input and the invoking agent.
  * @returns the command result rendered by the dispatching UI.
  */
-export function orgCommandHandler(org: OrgApi, deps: OrgDeps, invocation: OrgCommandInvocation): CommandResult {
+export async function orgCommandHandler(org: OrgApi, deps: OrgDeps, invocation: OrgCommandInvocation): Promise<CommandResult> {
   const parts = invocation.rawInput.trim().split(/\s+/).filter(part => part !== '')
   const verb = parts[0]
   const argument = parts[1]
@@ -43,7 +44,7 @@ export function orgCommandHandler(org: OrgApi, deps: OrgDeps, invocation: OrgCom
         applySecretaryEnvelope(invocation.agent.ctx, invocation.agent, deps)
         org.setRole(invocation.agent.id, 'secretary')
       } catch (error) {
-        return { kind: 'error', text: `org: cannot enable the secretary envelope: ${error instanceof Error ? error.message : String(error)}` }
+        return { kind: 'error', text: `org: cannot enable the secretary envelope: ${describeError(error)}` }
       }
       return {
         kind: 'success',
@@ -51,15 +52,31 @@ export function orgCommandHandler(org: OrgApi, deps: OrgDeps, invocation: OrgCom
       }
     }
     case 'off': {
+      // Leaving secretary mode must also release every management edge this
+      // session holds: keeping the edges would leave the `org` projection
+      // showing managed ids after `role: null` and orphan the leads' envelopes.
+      const failures: string[] = []
+      let released = 0
+      for (const target of org.managesOf(invocation.agent.id)) {
+        try {
+          await org.relinquish(invocation.agent, target)
+          released += 1
+        } catch (error) {
+          failures.push(`${target}: ${describeError(error)}`)
+        }
+      }
       try {
         disposeEnvelope(invocation.agent)
         org.setRole(invocation.agent.id, undefined)
       } catch (error) {
-        return { kind: 'error', text: `org: ${error instanceof Error ? error.message : String(error)}` }
+        failures.push(describeError(error))
+      }
+      if (failures.length > 0) {
+        return { kind: 'error', text: `org: ${failures.join('; ')}` }
       }
       return {
         kind: 'success',
-        text: `Coordinator role cleared for ${invocation.agent.id}: the capability envelope is lifted and the global tool set is back. Run /org on to become a secretary again.`,
+        text: `Coordinator role cleared for ${invocation.agent.id}: the capability envelope is lifted, ${released} management edge(s) released, and the global tool set is back. Run /org on to become a secretary again.`,
       }
     }
     case 'claim':
@@ -67,11 +84,11 @@ export function orgCommandHandler(org: OrgApi, deps: OrgDeps, invocation: OrgCom
     case 'forbid': {
       if (argument === undefined) return { kind: 'error', text: ORG_USAGE }
       try {
-        if (verb === 'claim') org.claim(invocation.agent, argument)
-        else if (verb === 'relinquish') org.relinquish(invocation.agent, argument)
-        else org.forbid(invocation.agent, argument)
+        if (verb === 'claim') await org.claim(invocation.agent, argument)
+        else if (verb === 'relinquish') await org.relinquish(invocation.agent, argument)
+        else await org.forbid(invocation.agent, argument)
       } catch (error) {
-        return { kind: 'error', text: `org ${verb}: ${error instanceof Error ? error.message : String(error)}` }
+        return { kind: 'error', text: `org ${verb}: ${describeError(error)}` }
       }
       const done = verb === 'claim' ? 'now manages' : verb === 'relinquish' ? 'released' : 'now forbids'
       return { kind: 'success', text: `${invocation.agent.id} ${done} ${argument}.` }

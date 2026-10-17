@@ -1,6 +1,6 @@
 /**
  * The `subtask_parallel` gates: the three configurable knobs that keep a
- * recursive fan-out from exploding (DESIGN-COORDINATOR-SUITE-V1.0.md §5.5,
+ * recursive fan-out from exploding (DESIGN-COORDINATOR-SUITE.md §5.5,
  * §9 risk "递归 fan-out 失控").
  *
  * - `maxDepth` — the delegation-depth cap. At the cap the caller does the work
@@ -36,6 +36,12 @@ export interface FanOutTaskSpec {
   readonly model?: SubTaskTier
   /** Optional role; omitted means `worker`. Reviewers are read-only one-shots. */
   readonly role?: SubTaskRole
+  /**
+   * Optional per-brief worker tool filter (design §5.10 L354). It can only
+   * NARROW the worker tool set; the dispatcher intersects it with
+   * {@link WORKER_INHERITED_TOOLS} before restricting the child.
+   */
+  readonly toolFilter?: readonly string[]
 }
 
 /** One validated, defaulted sub-task. */
@@ -43,6 +49,8 @@ export interface NormalizedSubTask {
   readonly brief: string
   readonly tier: SubTaskTier
   readonly role: SubTaskRole
+  /** Present when the brief narrowed its worker toolset. */
+  readonly toolFilter?: readonly string[]
 }
 
 /** The configured gate values. */
@@ -158,7 +166,30 @@ function checkTask(task: FanOutTaskSpec, index: number): TaskCheck {
   if (brief === '') {
     return { ok: false, refusal: { code: 'invalid-task', reason: `task #${index} needs a non-empty brief` } }
   }
-  return { ok: true, task: { brief, tier: task.model ?? 'good', role: task.role ?? 'worker' } }
+  if (task.toolFilter !== undefined) {
+    if (!Array.isArray(task.toolFilter)
+      || task.toolFilter.some(name => typeof name !== 'string' || name.trim() === '')) {
+      return {
+        ok: false,
+        refusal: {
+          code: 'invalid-task',
+          reason: `task #${index} toolFilter must be an array of non-empty tool names`,
+        },
+      }
+    }
+  }
+  const toolFilter = task.toolFilter === undefined
+    ? undefined
+    : [...new Set(task.toolFilter.map(name => name.trim()))]
+  return {
+    ok: true,
+    task: {
+      brief,
+      tier: task.model ?? 'good',
+      role: task.role ?? 'worker',
+      ...toolFilter === undefined ? {} : { toolFilter },
+    },
+  }
 }
 
 /**

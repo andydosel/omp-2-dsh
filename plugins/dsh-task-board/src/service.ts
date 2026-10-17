@@ -14,9 +14,12 @@
  */
 
 import { Service, type Context, type Fiber } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { SessionId, type Session } from '@deepseek-ai/dsh-session'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { describeError } from '@dsh-plugin/dsh-util/error'
+import { toSessionId } from '@dsh-plugin/dsh-util/session'
 import { registerTaskCommands } from './commands.ts'
 import {
   EMPTY_TASK_BOARD,
@@ -43,7 +46,7 @@ export interface TaskBoardConfig {
   /** Hard UTF-8 byte budget of the work-set prompt section (default {@link DEFAULT_MAX_CONTEXT_BYTES}). */
   maxContextBytes?: number
   /** Successful tool-result substrings that complete in-progress tasks (default `['test-passed']`). */
-  autoCloseSignals?: readonly string[]
+  autoCloseSignals?: string[]
 }
 
 /** Config with every default materialized. */
@@ -58,7 +61,19 @@ export const DEFAULT_MAX_CONTEXT_BYTES = 2000
 /** Default auto-close signal: only an unmistakable "the tests pass" result closes a task. */
 export const DEFAULT_AUTO_CLOSE_SIGNALS: readonly string[] = ['test-passed']
 
-/** Arguments of {@link TaskBoardHost.create} / the one-object overload. */
+/** The accepted configuration keys (unknown keys fail loud). */
+export const KNOWN_CONFIG_KEYS: Readonly<Record<keyof TaskBoardConfig, true>> = {
+  maxContextBytes: true,
+  autoCloseSignals: true,
+}
+
+/** Schema of the task-board row configuration. */
+export const Config: z<TaskBoardConfig> = z.object({
+  maxContextBytes: z.number().step(1).min(0).default(DEFAULT_MAX_CONTEXT_BYTES),
+  autoCloseSignals: z.array(z.string()).default([...DEFAULT_AUTO_CLOSE_SIGNALS]),
+})
+
+/** Arguments of {@link TaskBoardHost.create}. */
 export interface CreateTaskInput {
   /** Requirement-level description; required, non-empty. */
   subject: string
@@ -77,6 +92,8 @@ export interface TaskBoardHost {
   create(session: Session, input: CreateTaskInput): TaskSnapshot
   /** Compare-and-set update; `revision` mismatches throw {@link TaskRevisionConflictError}. */
   update(session: Session, id: TaskId, patch: TaskPatch, revision?: number): TaskSnapshot
+  /** Mark the newest open task `awaiting_approval` (the review gate's hand-off). */
+  markAwaitingApproval(session: Session, id?: TaskId): TaskSnapshot | undefined
   /** Close a task: status `closed`, out of the work set, tombstone kept. */
   close(session: Session, id: TaskId, reason?: string): TaskSnapshot
   /** Reopen a terminal task: status `pending`, back in the work set. */
@@ -116,6 +133,11 @@ export function matchesAutoCloseSignal(text: string, signals: readonly string[])
 
 /** Materialize and validate the plugin config (fail loud on a bad knob). */
 export function resolveTaskBoardConfig(config: TaskBoardConfig = {}): ResolvedTaskBoardConfig {
+  for (const key of Object.keys(config)) {
+    if (KNOWN_CONFIG_KEYS[key as keyof TaskBoardConfig] === undefined) {
+      throw new TypeError(`dsh-task-board: unknown config key "${key}" (known: maxContextBytes, autoCloseSignals)`)
+    }
+  }
   const maxContextBytes = config.maxContextBytes ?? DEFAULT_MAX_CONTEXT_BYTES
   if (!Number.isSafeInteger(maxContextBytes) || maxContextBytes < 0) {
     throw new TypeError(`dsh-task-board: maxContextBytes must be a non-negative integer, got ${String(config.maxContextBytes)}`)
@@ -135,7 +157,7 @@ export function resolveTaskBoardConfig(config: TaskBoardConfig = {}): ResolvedTa
  */
 function patchedTask(current: TaskSnapshot, patch: TaskPatch): TaskSnapshot {
   const status = patch.status ?? current.status
-  const owner = patch.owner === undefined ? current.owner : SessionId(String(patch.owner))
+  const owner = patch.owner === undefined ? current.owner : toSessionId(patch.owner)
   return {
     id: current.id,
     revision: current.revision + 1,
@@ -155,6 +177,8 @@ function patchedTask(current: TaskSnapshot, patch: TaskPatch): TaskSnapshot {
  */
 export class TaskBoardService extends Service implements TaskBoardHost {
   static inject = ['agents', 'sessionProjections', 'tools'] as const
+
+  static Config = Config
 
   /** Effective config (defaults materialized). */
   readonly config: ResolvedTaskBoardConfig
@@ -193,14 +217,8 @@ export class TaskBoardService extends Service implements TaskBoardHost {
   }
 
   /** Create a task from `(session, input)`. */
-  create(session: Session, input: CreateTaskInput): TaskSnapshot
-  /** Create a task from a single `{ session, subject, … }` object (sibling-plugin form). */
-  create(input: CreateTaskInput & { session: Session }): TaskSnapshot
-  create(sessionOrInput: Session | (CreateTaskInput & { session: Session }), input?: CreateTaskInput): TaskSnapshot {
-    const call = input === undefined
-      ? oneObjectCreate(sessionOrInput as CreateTaskInput & { session: Session })
-      : { session: sessionOrInput as Session, input }
-    return this.addTask(call.session, call.input)
+  create(session: Session, input: CreateTaskInput): TaskSnapshot {
+    return this.addTask(session, input)
   }
 
   update(session: Session, id: TaskId, patch: TaskPatch, revision?: number): TaskSnapshot {
@@ -239,6 +257,23 @@ export class TaskBoardService extends Service implements TaskBoardHost {
     return findTask(this.boardOf(session), id)
   }
 
+  /**
+   * Mark the newest open task `awaiting_approval` (the `--review`/`--plan`
+   * hand-off from the review gate). When `id` is omitted the board picks the
+   * latest task that is still pending/in progress; a board with no open task
+   * is a no-op, because the gate may arm before a requirement exists.
+   * @param session - the session whose board is updated.
+   * @param id - an explicit task id, when the caller knows it.
+   * @returns the updated task, or undefined when none matched.
+   */
+  markAwaitingApproval(session: Session, id?: TaskId): TaskSnapshot | undefined {
+    const target = id === undefined
+      ? [...this.boardOf(session)].reverse().find(task => !isTerminalStatus(task.status))
+      : findTask(this.boardOf(session), id)
+    if (target === undefined || target.status === 'awaiting_approval' || isTerminalStatus(target.status)) return target
+    return this.update(session, target.id, { status: 'awaiting_approval' }, target.revision)
+  }
+
   /** Mark one task completed and out of the work set (the auto-close target). */
   complete(session: Session, id: TaskId): TaskSnapshot {
     const current = this.requireTask(session, id)
@@ -260,7 +295,7 @@ export class TaskBoardService extends Service implements TaskBoardHost {
       revision: 1,
       subject,
       status: 'pending',
-      ...input.owner === undefined ? {} : { owner: SessionId(String(input.owner)) },
+      ...input.owner === undefined ? {} : { owner: toSessionId(input.owner) },
       reviewRound: 0,
       findings: [],
       filteredFindings: [],
@@ -328,12 +363,8 @@ export class TaskBoardService extends Service implements TaskBoardHost {
    */
   private disposeWorkSetFiber(fiber: Fiber): void {
     void fiber.dispose().catch((error: unknown) => {
-      this.ctx.logger.warn(`dsh-task-board: work-set section cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+      this.ctx.logger.warn(`dsh-task-board: work-set section cleanup failed: ${describeError(error)}`)
     })
   }
 }
 
-/** Normalize the one-object `create` overload (a `Session` never carries a `subject`). */
-function oneObjectCreate(value: CreateTaskInput & { session: Session }): { session: Session; input: CreateTaskInput } {
-  return { session: value.session, input: value }
-}

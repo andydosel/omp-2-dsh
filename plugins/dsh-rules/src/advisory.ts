@@ -15,6 +15,7 @@
 import { readFileSync, statSync } from 'node:fs'
 import { extname, isAbsolute, resolve } from 'node:path'
 import { expandHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { describeError } from '@dsh-plugin/dsh-util/error'
 
 /**
  * The unique system-prompt section slot for advisory rules. Deliberately not
@@ -24,14 +25,14 @@ import { expandHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
  */
 export const ADVISORY_SECTION = 'rules:advisory'
 
-/** Bytes read from one advisory source before truncation. */
-export const ADVISORY_MAX_BYTES = 16_384
+/** Default bytes read from one advisory source before truncation. */
+export const DEFAULT_ADVISORY_MAX_BYTES = 16_384
 
 /** One successfully loaded advisory source. */
 export interface AdvisorySource {
   /** Absolute path the text was read from. */
   readonly path: string
-  /** File text, truncated to {@link ADVISORY_MAX_BYTES} with a marker. */
+  /** File text, truncated to the configured byte cap with a marker. */
   readonly text: string
 }
 
@@ -39,6 +40,8 @@ export interface AdvisorySource {
 export interface AdvisoryLoadOptions {
   /** Harness home for `$DSH_HOME` and bare entries; defaults to `resolveDshHome()`. */
   readonly dshHome?: string
+  /** Bytes read per source before truncation; defaults to {@link DEFAULT_ADVISORY_MAX_BYTES}. */
+  readonly maxBytes?: number
   /** Called for every configured source that was skipped, with the reason. */
   readonly onSkip?: (path: string, reason: string) => void
 }
@@ -78,6 +81,7 @@ export function loadAdvisorySources(
   options: AdvisoryLoadOptions = {},
 ): AdvisorySource[] {
   const dshHome = options.dshHome ?? resolveDshHome()
+  const maxBytes = options.maxBytes ?? DEFAULT_ADVISORY_MAX_BYTES
   const sources: AdvisorySource[] = []
   const seen = new Set<string>()
   for (const entry of entries) {
@@ -90,19 +94,19 @@ export function loadAdvisorySources(
         continue
       }
     } catch (error) {
-      options.onSkip?.(path, error instanceof Error ? error.message : String(error))
+      options.onSkip?.(path, describeError(error))
       continue
     }
     let raw: Buffer
     try {
       raw = readFileSync(path)
     } catch (error) {
-      options.onSkip?.(path, error instanceof Error ? error.message : String(error))
+      options.onSkip?.(path, describeError(error))
       continue
     }
-    const text = raw.byteLength <= ADVISORY_MAX_BYTES
+    const text = raw.byteLength <= maxBytes
       ? raw.toString('utf8')
-      : `${raw.subarray(0, ADVISORY_MAX_BYTES).toString('utf8')}\n…[truncated at ${ADVISORY_MAX_BYTES} bytes]`
+      : `${raw.subarray(0, maxBytes).toString('utf8')}\n…[truncated at ${maxBytes} bytes]`
     sources.push({ path, text })
   }
   return sources

@@ -179,8 +179,10 @@
     # registered with `interpolate: false` so literal braces in a rule file
     # survive. A missing file is skipped with a warning, so this row is safe
     # before `$DSH_HOME/AGENTS.md` / `$DSH_HOME/persona.md` exist.
-    # Gate: `gateRules` become per-call approval gates (`tools/pre-execute`
-    # listener + the `ctx.rules` service that review-gate/org consume). Empty
+    # Gate: `gateRules` become per-call approval gates (one `tools/pre-execute`
+    # listener returning `ask` when a call matches the rule; path-scoped rules
+    # match the tool's path argument against the globs and fail closed when no
+    # inspectable path is present). Empty
     # by default — the profile ships no protected paths of its own; add
     # `gateRules: [{ tool: write, paths: ['src/**'] }]` to arm it.
     - id: rules
@@ -286,7 +288,11 @@
             name: '@deepseek-ai/dsh-persona'
             config:
               prefix: You are a coding agent powered by the {{model}} model.
-              suffix: Your working directory is {{cwd}}.
+              # 0.2.1 registers only `provider` and `model` as prompt variables;
+              # `{{cwd}}` is rejected at assembly (`unknown prompt variable`).
+              # The workspace path is already in the runtime context, so the
+              # suffix is static here.
+              suffix: Work from the session's current working directory.
 
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
@@ -530,7 +536,9 @@
 # to the TARGET session's log — that log IS the inbox), the `ctx.peers` send/
 # list service with the self-built `senderId+messageId` dedup key, and the
 # global `peer_send` tool. It is a separate package because the channel is
-# meaningful without any org: any two live sessions may address each other.
+# meaningful without any org: a coordinator (secretary) may address any session
+# it has not forbidden, while every other session may address only its manager,
+# a session it manages, or a durable ancestor/descendant.
 #
 # `dsh-org` owns the role model on top of it: the durable `org/*` events
 # (`claim`/`relinquish`/`forbid`/`role`, plus `assign`/`notice`) folded into
@@ -557,9 +565,9 @@
     # (the long task brief that a lead reads back); `secretaryBash: false` is
     # the deliberate hard guarantee behind "secretary cannot read code text":
     # bash has no path argument, so leaving it unmasked is the documented
-    # best-effort gap (see doc/VERIFY-PATH-RESTRICT.md §4c). Set
+    # best-effort gap. Set
     # `secretaryBash: true` only when the secretary needs shell exploration,
-    # accepting that the read gradient becomes advisory. `strictTakeover:
+    # accepting that the read gradient becomes advisory. `strictMode:
     # true` re-asks the human (via `ctx.approval`) before a model-initiated
     # takeover of an existing session.
     #
@@ -573,4 +581,4 @@
       config:
         handoffDir: '.dsh-handoff'
         secretaryBash: false
-        strictTakeover: false
+        strictMode: false

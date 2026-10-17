@@ -28,6 +28,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 // Type-only: pulls the `ctx.systemPrompt` Context merge into the compilation.
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import { describeError } from '@dsh-plugin/dsh-util/error'
 import { decidePathGate, workspaceRoot } from './paths.ts'
 import { defineReportTool, defineSecretaryTools } from './tools.ts'
 import type { OrgDeps, OrgRole } from './types.ts'
@@ -83,6 +84,12 @@ export function disposeEnvelope(agent: Agent): void {
 /**
  * Inherited tool names a secretary keeps. Its nine role tools are registered
  * after the restriction and are deliberately absent here.
+ *
+ * `write`/`edit` are present because §5.9 gives the secretary the handoff area
+ * (long task briefs): the path gate (`decidePathGate`) confines them to
+ * `secretaryWritePaths`, so the authority is "handoff only", never real
+ * source. Reads stay on the scoped `read_project_docs`/`project_structure`
+ * tools, so no global `read`/`glob`/`grep` is granted.
  */
 export const SECRETARY_INHERITED_TOOLS: readonly string[] = [
   'peer_send',
@@ -93,16 +100,22 @@ export const SECRETARY_INHERITED_TOOLS: readonly string[] = [
   'task_list',
   'ask_question',
   'todo_write',
+  'write',
+  'edit',
 ]
 
 /**
  * Inherited tool names a lead keeps (`report` is scoped and registered after
- * the restriction; `subtask_parallel` and the dsh-orchestrator `review_loop`
- * that carries a requirement's review loop survive only when that plugin is
- * composed — the intersection handles that). The review-work subagent's own
- * tools (`review_round`/`review_filter`/`review_finish`/`review_block`/
- * `review_resume`) are gated to the carrier child's scope by the orchestrator,
- * never granted here.
+ * the restriction; `subtask_parallel`, the dsh-orchestrator `review_loop` that
+ * starts a requirement's review loop, and `review_filter` (which §5.7 puts on
+ * the delegating lead so false positives stop counting) survive only when that
+ * plugin is composed — the intersection handles that). `bash` is deliberately
+ * absent: the path gate cannot inspect a shell command's write target, so
+ * keeping bash in the envelope would let a lead bypass it. A lead reports the
+ * need for shell work to its secretary instead. The review-work subagent's
+ * remaining tools (`review_round`/`review_finish`/`review_complete`/
+ * `review_block`/`review_resume`) are gated to the carrier child's scope by the
+ * orchestrator, never granted here.
  */
 export const LEAD_INHERITED_TOOLS: readonly string[] = [
   'read',
@@ -112,9 +125,9 @@ export const LEAD_INHERITED_TOOLS: readonly string[] = [
   'lsp',
   'write',
   'edit',
-  'bash',
   'subtask_parallel',
   'review_loop',
+  'review_filter',
   'peer_send',
   'task_new',
   'task_update',
@@ -194,7 +207,7 @@ function applyEnvelope(agentCtx: Context, agent: Agent, deps: OrgDeps, role: Org
     // report the original failure (plus any teardown failure) at one site.
     const failures = disposeAll(disposers)
     const suffix = failures.length === 0 ? '' : ` (and ${failures.length} effect(s) failed to unwind: ${String(failures[0])})`
-    throw new Error(`dsh-org: ${role} envelope install failed: ${error instanceof Error ? error.message : String(error)}${suffix}`)
+    throw new Error(`dsh-org: ${role} envelope install failed: ${describeError(error)}${suffix}`)
   }
   APPLIED.set(agent, { role, disposers })
 }

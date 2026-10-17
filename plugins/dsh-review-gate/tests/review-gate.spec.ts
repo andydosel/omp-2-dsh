@@ -49,6 +49,10 @@ describe('parseInputFlags', () => {
     expect(parseInputFlags('ship it --no-review')).toEqual({ text: 'ship it', review: false })
   })
 
+  it('treats --plan as the review family', () => {
+    expect(parseInputFlags('draft the migration --plan')).toEqual({ text: 'draft the migration', review: true })
+  })
+
   it('reads --workers N in the space form', () => {
     expect(parseInputFlags('do the thing --workers 4')).toEqual({ text: 'do the thing', workers: 4 })
   })

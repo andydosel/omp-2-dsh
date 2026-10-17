@@ -110,19 +110,6 @@ export function applyFlagsToState(
 }
 
 /**
- * Structural identity of two gate states (spread copies compare by value).
- * @param left - one state.
- * @param right - the other state.
- * @returns true when every field matches.
- */
-export function sameGateState(left: ReviewGateState, right: ReviewGateState): boolean {
-  return left.taskId === right.taskId
-    && left.awaitingApproval === right.awaitingApproval
-    && left.enabled === right.enabled
-    && left.reviewers === right.reviewers
-}
-
-/**
  * The registered unit shape: the registry's client-visible overload requires a
  * `wire` view, so the definition narrows that member from optional.
  */

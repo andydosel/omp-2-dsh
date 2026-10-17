@@ -14,9 +14,11 @@ import type { ResolvedOrchestratorConfig, OrchestratorConfig } from '../src/conf
 import { resolveConfig } from '../src/config.ts'
 import { OrchestratorRuntime } from '../src/runtime.ts'
 
-/** A fake live agent with a real Session. */
+/** A fake live agent with a real Session and the tool masks applied to its scope. */
 export interface FakeAgent extends Agent {
   session: Session
+  /** Every `tools.restrict({allow})` this agent's scope received, in order. */
+  readonly restricts: string[][]
 }
 
 /** Create one fake live agent (optionally a delegable child of another, with a cwd). */
@@ -38,14 +40,25 @@ export function makeAgent(id: string, parent?: FakeAgent, cwd?: string): FakeAge
         delegationDepth: depth,
       },
     })
+  const restricts: string[][] = []
   return {
     id: SessionId(id),
     session,
+    restricts,
     options: parent === undefined ? {} : { subagentDepth: depth },
     status: 'idle',
     // A bare probe: the advisor's shared reviewer helper reads delegated policy
-    // through `agent.ctx.get(...)`, which resolves to nothing here.
-    ctx: { get: () => undefined } as unknown as Context,
+    // through `agent.ctx.get(...)`, which resolves to nothing here. The tools
+    // seam lets the worker-spawn base restrict a dispatched child's scope.
+    ctx: {
+      get: () => undefined,
+      tools: {
+        restrict: (filter: { allow?: readonly string[] }) => {
+          restricts.push([...(filter.allow ?? [])])
+          return () => {}
+        },
+      },
+    } as unknown as Context,
   } as unknown as FakeAgent
 }
 
@@ -219,14 +232,14 @@ export function makeHarness(config: OrchestratorConfig = {}): Harness {
       sent.push({ senderId: sender.id, targetId, text })
       return 'message-1'
     },
-    startContinuable: async (spec: {
+    startActivation: async (spec: {
       provider: string
       label: string
       request: { prompt: readonly ContentBlock[]; parent: Agent }
     }) => {
       const prompt = spec.request.prompt.map(block => (block.type === 'text' ? block.text : '')).join('')
       starts.push({ provider: spec.provider, label: spec.label, prompt, parentId: spec.request.parent.id })
-      return { childId: SessionId(childId), messageId: 'message-1' }
+      return { childId: SessionId(childId), messageId: 'message-1', dispose: async () => {} }
     },
   } as never)
 

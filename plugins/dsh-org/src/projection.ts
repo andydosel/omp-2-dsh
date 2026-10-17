@@ -19,9 +19,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
-import { z as zod } from 'zod'
+import { z } from 'zod'
 import type { ZodType } from 'zod'
-import type { OrgNotice, OrgProjectionView, OrgRole } from './types.ts'
+import type { OrgProjectionView, OrgRole } from './types.ts'
 
 /** An empty organisation view (an independent session with no notices). */
 export function emptyOrgView(): OrgProjectionView {
@@ -33,33 +33,29 @@ function asRole(role: OrgRole | undefined): OrgRole | null {
   return role ?? null
 }
 
-/** Whether a value is a valid {@link OrgNotice}. */
-function isNotice(value: unknown): value is OrgNotice {
-  if (value === null || typeof value !== 'object') return false
-  if (!('id' in value) || !('content' in value) || !('time' in value)) return false
-  const { id, content, time } = value
-  return typeof id === 'string' && typeof content === 'string' && typeof time === 'number'
-}
+const orgNoticeSchema = z.object({
+  id: z.string(),
+  content: z.string(),
+  time: z.number(),
+}).strict()
 
-/** Whether a value is a valid string array. */
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(entry => typeof entry === 'string')
-}
+/**
+ * The persisted/wire schema of the `org` view, structured like the task
+ * board's. The cast only bridges the branded `SessionId` members: zod
+ * validates the wire-JSON strings, and the brand is a compile-time refinement
+ * with no runtime representation.
+ */
+export const orgViewSchema = z.object({
+  role: z.enum(['secretary', 'lead']).nullable(),
+  managedBy: z.string().nullable(),
+  manages: z.array(z.string()),
+  forbidden: z.array(z.string()),
+  notices: z.array(orgNoticeSchema),
+}).strict() as unknown as ZodType<OrgProjectionView>
 
 /** Runtime guard for the persisted/wire `org` view. */
 export function isOrgProjectionView(value: unknown): value is OrgProjectionView {
-  if (value === null || typeof value !== 'object') return false
-  if (!('role' in value) || !('managedBy' in value) || !('manages' in value) || !('forbidden' in value) || !('notices' in value)) {
-    return false
-  }
-  const { role, managedBy, manages, forbidden, notices } = value
-  const roleOk = role === null || role === 'secretary' || role === 'lead'
-  const managedOk = managedBy === null || typeof managedBy === 'string'
-  return roleOk
-    && managedOk
-    && isStringArray(manages)
-    && isStringArray(forbidden)
-    && Array.isArray(notices) && notices.every(isNotice)
+  return orgViewSchema.safeParse(value).success
 }
 
 /**
@@ -94,6 +90,10 @@ export function applyOrgView(state: OrgProjectionView, event: SessionEvent): Org
       const { targetId } = event.data
       return state.forbidden.includes(targetId) ? state : { ...state, forbidden: [...state.forbidden, targetId] }
     }
+    case 'org/forbidden':
+      // Target-side mirror: this log belongs to the session that was forbidden,
+      // so it must not enter that session's own "sessions I forbade" list.
+      return state
     case 'org/notice':
       return {
         ...state,
@@ -103,9 +103,6 @@ export function applyOrgView(state: OrgProjectionView, event: SessionEvent): Org
       return state
   }
 }
-
-/** The persisted/wire schema of the `org` view. */
-export const orgViewSchema: ZodType<OrgProjectionView> = zod.custom<OrgProjectionView>(isOrgProjectionView)
 
 /** State → wire payload (the view IS the served value; reuse the reference). */
 export function viewOrg(state: OrgProjectionView): OrgProjectionView {

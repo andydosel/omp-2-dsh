@@ -2,7 +2,7 @@
 
 > 目标：让 `@dsh-plugin/*` 这套插件（tree-engine / compact-mode / tool-read-write /
 > advisor / channel-wechat / mode-ui / review-gate / question-board / task-board /
-> rules / orchestrator / peers / org，外加共享库 dsh-worker-spawn）通过 **GitHub Release
+> rules / orchestrator / peers / org，外加共享库 dsh-worker-spawn / dsh-util）通过 **GitHub Release
 > 预构建 zip** 分发给外部用户，消费者**零 build、零 registry、零 token**，
 > 用最少的步骤下载、安装、每日启动。
 > 范围：设计方案 + 配套脚本（`plugin/release.ps1` / `setup.ps1` / `start.ps1`）
@@ -34,7 +34,7 @@
    需 `publishConfig.access:"public"`。Release 路径**无 registry / scope / auth**，
    版本直接绑 `tag = v<version>`，天然免这些前置。
 5. **可选的 CI 自动化**：`plugin/.github/workflows/release.yml` 骨架，打 tag
-   `v*` → 构建 14 包 → `gh release create` 上传 `dsh-suite-<version>.zip`。
+   `v*` → 构建 15 包 → `gh release create` 上传 `dsh-suite-<version>.zip`。
    骨架，未在 CI 实测（见 §6 待验证项）。
 
 ---
@@ -68,7 +68,7 @@
 | 阻塞项 | 说明 |
 |---|---|
 | **scope 归属** | `@dsh-plugin` scope 需要存在同名 npm 用户/组织，且发布者是其成员/拥有者（`docs.npmjs.com scope` 规定）。当前无人占用但**无法匿名确认归属**。 |
-| **`private:true`** | 全部 14 包都 `private:true`，直接 `pnpm publish` 被拒。 |
+| **`private:true`** | 全部 15 包都 `private:true`，直接 `pnpm publish` 被拒。 |
 | **`workspace:*`** | `dsh-compact-mode` 依赖 `tree-engine: workspace:*`（`package.json:56`），外部消费者无法解析，须改成 `^0.1.0`。 |
 | **`-rc.x` 不占 `latest`** | compact-mode/advisor/org/peers/rules 是 `0.1.0-rc.x`，裸 `add` 装不到，要 bump 稳定版。 |
 | **发布不自动构建** | 只有 `build` 无 `prepack`，`pnpm publish` 不会先跑 build。 |
@@ -107,6 +107,7 @@ dsh-suite-<version>/
 └── @dsh-plugin/                     # 直接映射 → ~/.dsh/profiles/web/node_modules/@dsh-plugin/
     ├── tree-engine/                 {package.json, lib/**}
     ├── dsh-worker-spawn/            {package.json, lib/**}   # 纯库（无插件入口）
+    ├── dsh-util/                    {package.json, lib/**}   # 纯库（共享 glob/XML/session-id）
     ├── dsh-compact-mode/            {package.json, lib/**}
     ├── dsh-tool-read-write/         {package.json, lib/**}
     ├── dsh-advisor/                 {package.json, lib/**}
@@ -220,25 +221,25 @@ consumer = Release** 的双轨。
 
 ## 5. 版本与发布命令
 
-- **单源版本**：`plugin/VERSION`（当前 `0.1.0`）。
+- **单源版本**：`plugin/VERSION`（当前 `0.2.0`）。
   `release.ps1` 优先读 `-Version`，否则读 `VERSION`；zip 名 = `dsh-suite-<version>.zip`；
   GitHub Release **tag = `v<version>`**。
 - `release.ps1` 只构建 + 打包，**不**执行发布。结尾打印（且仅打印）文档化的命令：
 
   ```powershell
-  git add -A && git commit -m "chore: release dsh-suite 0.1.0"
-  git tag v0.1.0
-  git push origin v0.1.0
-  gh release create v0.1.0 ".\release\dsh-suite-0.1.0.zip" --title "dsh-suite 0.1.0" --notes "See plugin/README.md for install/usage."
+  git add -A && git commit -m "chore: release dsh-suite 0.2.0"
+  git tag v0.2.0
+  git push origin v0.2.0
+  gh release create v0.2.0 ".\release\dsh-suite-0.2.0.zip" --title "dsh-suite 0.2.0" --notes "See plugin/README.md for install/usage."
   ```
 
   实际运行时看到的输出：
 
   ```
   Next steps (documented; not run here):
-    git tag v0.1.0
-    git push origin v0.1.0
-    gh release create v0.1.0 "C:\...\plugin\release\dsh-suite-0.1.0.zip" --title "dsh-suite 0.1.0" --notes "See plugin/README.md for install/usage."
+    git tag v0.2.0
+    git push origin v0.2.0
+    gh release create v0.2.0 "C:\...\plugin\release\dsh-suite-0.2.0.zip" --title "dsh-suite 0.2.0" --notes "See plugin/README.md for install/usage."
   ```
 
 > 任务约束：本方案**未执行** `git tag` / `gh release create`（不发布）。
@@ -280,7 +281,7 @@ jobs:
 - 仓库是 dsh-plugin 根；workflow 位于 `plugin/` 下（若移至根 `.github/` 需改
   checkout/`release.ps1` 路径）。
 - **安装拓扑**：单一根 workspace（`pnpm-workspace.yaml` 的 `packages: plugins/*`）
-  管理全部 14 个包，`pnpm install` 一次即可；不再有「根装一次 + 独立包各装一次」
+  管理全部 15 个包，`pnpm install` 一次即可；不再有「根装一次 + 独立包各装一次」
   的分裂。
 - `softprops/action-gh-release` 需要仓库写权限（`contents: write`）与可用的
   `GITHUB_TOKEN`（默认提供）。
@@ -290,7 +291,7 @@ jobs:
 ## 7. 与 npm 路径的对比（来自 RESEARCH-PUBLISH-PLAN）
 
 - npm 方案的最终形态是：先把 5 个纯后端包发布，再发 2 个带客户面的包，最后发一个
-  套件 bundle `@dsh-plugin/dsh-suite`（`dsh.bundle.patch` + dependencies 引用 13 插件），
+  套件 bundle `@dsh-plugin/dsh-suite`（`dsh.bundle.patch` + dependencies 引用 15 个包（含 dsh-util）），
   用户 `dsh plugin --profile web add @dsh-plugin/dsh-suite` 一键激活。
 - 它**可行但门槛多**：见 §1.3 的 7 项前置改动 + scope 归属 + token。而且
   `profile-main` / `profile-personal` 作为 profile 目录**不能**作为 npm 包发布
@@ -356,11 +357,11 @@ jobs:
 
 | 文件 | 作用 |
 |---|---|
-| `plugin/release.ps1` | 依赖顺序 build 14 包 → 打 `dsh-suite-<version>.zip` → 打印（非执行）tag+Release 命令 |
-| `plugin/setup.ps1` | 消费者一次性安装：拷 14 包进 profile node_modules + 拷 preset + 暂存 patch + 校验入口/bundle（幂等） |
+| `plugin/release.ps1` | 依赖顺序 build 15 包 → 打 `dsh-suite-<version>.zip` → 打印（非执行）tag+Release 命令 |
+| `plugin/setup.ps1` | 消费者一次性安装：拷 15 包进 profile node_modules + 拷 preset + 暂存 patch + 校验入口/bundle（幂等） |
 | `plugin/start.ps1` | 每日启动：`dsh web --patch <staged patch>`（不 build/install） |
 | `plugin/README.md` | 随 zip 的安装/使用说明 |
-| `plugin/VERSION` | 单源版本号（`0.1.0`） |
+| `plugin/VERSION` | 单源版本号（`0.2.0`） |
 | `plugin/profile-main/run.ps1` | 本地 monorepo 全量脚本 + 新增 `-Fast` 瘦身开关 |
 | `plugin/.github/workflows/release.yml` | CI 骨架：tag `v*` → build → 上传 Release 资产 |
 | `doc/DESIGN-RELEASE-DISTRIBUTION-V1.0.md` | 本设计文档 |
@@ -376,4 +377,4 @@ jobs:
 - `doc/PLUGIN_DEV_PLAYBOOK.md:191,292,494-499` — 插件 `main: lib/index.js`；「git 装的是源码」；整仓构建/启动实测
 - `doc/RESEARCH-BOOT-WORKFLOW.md` — 启动成本分解、最快日启动、git 上手流
 - `doc/RESEARCH-PUBLISH-PLAN.md` — npm 发布调研/阻塞/对比（§4、§5、§7）
-- 本机实测（**设计写作时的快照**,当时为 7 插件 / 2 个客户面 bundle;现套件已扩到 14 包、客户面仅 mode-ui）:`plugin/release.ps1` 全量 build 并产出 `release/dsh-suite-0.1.0.zip`（zip 内 0 个 `*.tsbuildinfo`）；解压后 `setup.ps1` 对 `-DshHome <temp>` 跑两次（幂等），插件入口/client bundle/preset/staged patch 全部校验通过；`run.ps1 -Fast --dump-config` 正确跳过 build 与 install。
+- 本机实测（**设计写作时的快照**,当时为 7 插件 / 2 个客户面 bundle;现套件已扩到 15 包、客户面仅 mode-ui）:`plugin/release.ps1` 全量 build 并产出 `release/dsh-suite-0.1.0.zip`（zip 内 0 个 `*.tsbuildinfo`）；解压后 `setup.ps1` 对 `-DshHome <temp>` 跑两次（幂等），插件入口/client bundle/preset/staged patch 全部校验通过；`run.ps1 -Fast --dump-config` 正确跳过 build 与 install。

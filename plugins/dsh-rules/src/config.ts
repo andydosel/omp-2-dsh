@@ -10,6 +10,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { DEFAULT_ADVISORY_MAX_BYTES } from './advisory.ts'
 
 /**
  * One gate rule: gates calls of `tool`, optionally only those touching `paths`.
@@ -33,6 +34,8 @@ export interface RulesConfig {
    * extension is a file under `$DSH_HOME` with `.md` appended.
    */
   advisoryFiles: string[]
+  /** Bytes read from each advisory source before truncation (default `16384`). */
+  advisoryMaxBytes: number
   /** Gate rules turned into per-call approval gates. */
   gateRules: GateRule[]
   /** System-prompt section order for the advisory rules (the persona band is `0`). */
@@ -45,6 +48,7 @@ export const DEFAULT_ADVISORY_FILES: readonly string[] = ['$DSH_HOME/AGENTS.md',
 /** Runtime schema for the rules row. */
 export const Config: z<RulesConfig> = z.object({
   advisoryFiles: z.array(z.string()).default([...DEFAULT_ADVISORY_FILES]),
+  advisoryMaxBytes: z.number().step(1).min(1).default(DEFAULT_ADVISORY_MAX_BYTES),
   gateRules: z.array(z.object({
     tool: z.string().required(),
     paths: z.array(z.string()).default([]),
@@ -55,6 +59,7 @@ export const Config: z<RulesConfig> = z.object({
 /** Config after normalization: trimmed entries, empty paths lists collapsed away. */
 export interface ResolvedRulesConfig {
   advisoryFiles: string[]
+  advisoryMaxBytes: number
   gateRules: GateRule[]
   advisoryOrder: number
 }
@@ -67,6 +72,22 @@ export interface ResolvedRulesConfig {
  * @throws when an advisory source or a gate tool name is blank.
  */
 export function resolveConfig(config: RulesConfig): ResolvedRulesConfig {
+  // Schemastery merges unknown keys silently; the loader must reject a typo.
+  const known: Readonly<Record<string, true>> = {
+    advisoryFiles: true,
+    advisoryMaxBytes: true,
+    gateRules: true,
+    advisoryOrder: true,
+  }
+  for (const key of Object.keys(config)) {
+    if (known[key] === undefined) {
+      throw new Error(`dsh-rules: unknown config key "${key}" (known: advisoryFiles, advisoryMaxBytes, gateRules, advisoryOrder)`)
+    }
+  }
+  const advisoryMaxBytes = config.advisoryMaxBytes ?? DEFAULT_ADVISORY_MAX_BYTES
+  if (!Number.isInteger(advisoryMaxBytes) || advisoryMaxBytes <= 0) {
+    throw new Error(`dsh-rules: advisoryMaxBytes must be a positive integer (got ${JSON.stringify(config.advisoryMaxBytes)})`)
+  }
   const advisoryFiles = config.advisoryFiles.map((entry) => {
     const trimmed = entry.trim()
     if (trimmed.length === 0) throw new Error('dsh-rules: advisoryFiles entries must be non-empty')
@@ -78,5 +99,5 @@ export function resolveConfig(config: RulesConfig): ResolvedRulesConfig {
     const paths = (rule.paths ?? []).map(path => path.trim()).filter(path => path.length > 0)
     return paths.length === 0 ? { tool } : { tool, paths }
   })
-  return { advisoryFiles, gateRules, advisoryOrder: config.advisoryOrder }
+  return { advisoryFiles, advisoryMaxBytes, gateRules, advisoryOrder: config.advisoryOrder }
 }

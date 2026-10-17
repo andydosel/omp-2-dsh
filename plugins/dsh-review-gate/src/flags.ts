@@ -1,9 +1,9 @@
 /**
  * Trailing review-gate flag parsing and the model-facing strip.
  *
- * The user marks a task by suffixing their input: `--review` (plan first, wait
- * for approval), `--no-review` (cancel this task's gate) and `--workers N`
- * (how many reviewers this round runs). The flags are stripped from the
+ * The user marks a task by suffixing their input: `--review` / `--plan` (plan
+ * first, wait for approval), `--no-review` (cancel this task's gate) and
+ * `--workers N` (how many reviewers this round runs). The flags are stripped from the
  * model-facing message text so the model never reads the literal tokens; when
  * two review flags are present the one nearest the end of the input wins.
  *
@@ -44,6 +44,8 @@ function sourceKind(source: unknown): string | undefined {
 
 const TRAILING_NO_REVIEW = /(^|\s)--no-review\s*$/
 const TRAILING_REVIEW = /(^|\s)--review\s*$/
+/** `--plan` is the review-gate family's plan-first spelling (§5.3). */
+const TRAILING_PLAN = /(^|\s)--plan\s*$/
 const TRAILING_WORKERS = /(^|\s)--workers(?:=|\s+)(\d+)\s*$/
 
 /**
@@ -70,6 +72,12 @@ export function parseInputFlags(input: string): InputFlags {
     if (reviewMatch !== null) {
       review ??= true
       text = text.slice(0, reviewMatch.index + reviewMatch[1]!.length)
+      continue
+    }
+    const planMatch = TRAILING_PLAN.exec(text)
+    if (planMatch !== null) {
+      review ??= true
+      text = text.slice(0, planMatch.index + planMatch[1]!.length)
       continue
     }
     const workersMatch = TRAILING_WORKERS.exec(text)

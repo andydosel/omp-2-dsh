@@ -1,14 +1,16 @@
 /**
  * dsh-peers: the peer channel between live sessions
- * (DESIGN-COORDINATOR-SUITE-V1.0.md §5.1/§5.6/§5.9/§5.10/§13.6).
+ * (DESIGN-COORDINATOR-SUITE.md §5.1/§5.6/§5.9/§5.10/§13.6).
  *
  * One durable `peer/message` event, appended to the TARGET session's log (that
  * log IS the inbox), one `ctx.peers` send/list service with a self-built
  * `senderId+messageId` dedupe key, one `peers` projection, and one global
- * `peer_send` tool. The channel is meaningful without any session org: any two
- * live sessions may address each other; `dsh-org` only layers a role envelope
- * (the `tools.restrict` allow-mask plus a structural `isForbidden` probe) on
- * top, and is never imported here.
+ * `peer_send` tool. The channel is meaningful without any session org: a
+ * coordinator (secretary) may address any session it has not forbidden, while
+ * every other session may address only its manager, a session it manages, or a
+ * durable ancestor/descendant; `dsh-org` only layers a role envelope (the
+ * `tools.restrict` allow-mask plus a structural `isForbidden` probe) on top,
+ * and is never imported here.
  *
  * @module @dsh-plugin/dsh-peers
  */
@@ -20,7 +22,7 @@ import { PeersService, type PeersConfig } from './service.ts'
 /** The plugin's cordis runtime name. */
 export const name = 'dsh-peers'
 
-export { PeersService, PeerSendError, resolvePeersConfig, snapshotText, renderPeerMessage, deliveryMessage } from './service.ts'
+export { Config, PeersService, PeerSendError, resolvePeersConfig, snapshotText, renderPeerMessage, deliveryMessage } from './service.ts'
 export type { PeersConfig, ResolvedPeersConfig, PeerSendErrorCode } from './service.ts'
 export { PEER_SEND_TOOL, definePeerSendTool } from './tool.ts'
 export type { PeerSendValue } from './tool.ts'

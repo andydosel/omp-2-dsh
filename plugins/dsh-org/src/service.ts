@@ -22,9 +22,10 @@ import { randomUUID } from 'node:crypto'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { resolveOrgConfig, type OrgConfig, type ResolvedOrgConfig } from './config.ts'
-import { applyLeadEnvelope } from './envelope.ts'
+import { SessionId, SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { escapeXml } from '@dsh-plugin/dsh-util/xml'
+import { Config, resolveOrgConfig, type OrgConfig, type ResolvedOrgConfig } from './config.ts'
+import { applyLeadEnvelope, disposeEnvelope } from './envelope.ts'
 import { workspaceRoot } from './paths.ts'
 import {
   addForbidden,
@@ -32,12 +33,12 @@ import {
   emptyOrgState,
   forbiddenOf,
   grantClaim,
+  isForbidden,
   managerOf,
   managesOf,
   roleOf,
   toSessionId,
 } from './state.ts'
-import { escapeXml } from './tools.ts'
 import type {
   ApprovalProbe,
   AssignInput,
@@ -48,9 +49,21 @@ import type {
   OrgRole,
   OrgState,
   PeersProbe,
+  PersistenceHandleProbe,
+  PersistenceProbe,
   SpawnLeadInput,
   TaskBoardProbe,
 } from './types.ts'
+
+/**
+ * One event destined for a TARGET's own log. Release and forbid are mirrored
+ * onto the target log so it stays self-describing across a cold resume; the
+ * union keeps `live.append` type-narrowed per event type.
+ */
+type TargetLogEvent =
+  | { readonly type: 'org/role'; readonly data: { sessionId: SessionId } }
+  | { readonly type: 'org/relinquish'; readonly data: { secretaryId: SessionId; targetId: SessionId } }
+  | { readonly type: 'org/forbidden'; readonly data: { secretaryId: SessionId; targetId: SessionId } }
 
 /**
  * The organisation service (context key `org`). Constructing it registers the
@@ -59,9 +72,19 @@ import type {
 export class OrgService extends Service implements OrgApi {
   static inject = ['agents', 'sessions'] as const
 
-  readonly #config: ResolvedOrgConfig
-  readonly #deps: OrgDeps
-  #state: OrgState = emptyOrgState()
+  static Config = Config
+
+  /**
+   * Plain TypeScript-private fields, deliberately NOT ECMAScript `#` private
+   * fields: Cordis hands consumers a Proxy of this service (`ctx.get('org')`),
+   * and reading a `#field` through that Proxy throws "Cannot read private
+   * member #state from an object whose class did not declare it" because the
+   * Proxy is not an instance of the declaring class. These names are private
+   * by convention/type only, which is the price of a proxy-safe service.
+   */
+  private readonly resolvedConfig: ResolvedOrgConfig
+  private readonly resolvedDeps: OrgDeps
+  private orgState: OrgState = emptyOrgState()
 
   /**
    * @param ctx - the plugin context (`agents` and `sessions` are injected).
@@ -69,51 +92,52 @@ export class OrgService extends Service implements OrgApi {
    */
   constructor(ctx: Context, config: OrgConfig = {}) {
     super(ctx, 'org')
-    this.#config = resolveOrgConfig(config)
-    this.#deps = {
+    this.resolvedConfig = resolveOrgConfig(config)
+    this.resolvedDeps = {
       org: this,
-      config: this.#config,
+      config: this.resolvedConfig,
       peers: () => ctx.get('peers') as PeersProbe | undefined,
       taskBoard: () => ctx.get('taskBoard') as TaskBoardProbe | undefined,
       approval: () => ctx.get('approval') as ApprovalProbe | undefined,
       fs: () => ctx.get('fs') as FsProbe | undefined,
+      sessionPersistence: () => ctx.get('sessionPersistence') as PersistenceProbe | undefined,
     }
     // Seed from sessions that already exist, then stay current.
-    for (const session of ctx.sessions.list()) this.#foldLog(session)
-    ctx.on('session/created', session => this.#foldLog(session))
-    ctx.on('session/event', (session, event) => this.#applyEvent(session, event))
+    for (const session of ctx.sessions.list()) this.foldLog(session)
+    ctx.on('session/created', session => this.foldLog(session))
+    ctx.on('session/event', (session, event) => this.applyEvent(session, event))
   }
 
   /** The detached, validated configuration the role envelopes consume. */
   get config(): ResolvedOrgConfig {
-    return this.#config
+    return this.resolvedConfig
   }
 
   /** The seams the controller hands to the envelopes and tools. */
   get deps(): OrgDeps {
-    return this.#deps
+    return this.resolvedDeps
   }
 
   /** The live organisation state (do not mutate; every change goes through a transition). */
   state(): OrgState {
-    return this.#state
+    return this.orgState
   }
 
   // ── readers (OrgApi) ──────────────────────────────────────────────────────
 
   /** The secretary managing `targetId`, or undefined when independent. */
   managerOf(targetId: SessionId | string): SessionId | undefined {
-    return managerOf(this.#state, targetId)
+    return managerOf(this.orgState, targetId)
   }
 
   /** The sessions `secretaryId` currently manages, in claim order. */
   managesOf(secretaryId: SessionId | string): SessionId[] {
-    return managesOf(this.#state, secretaryId)
+    return managesOf(this.orgState, secretaryId)
   }
 
   /** The sessions `secretaryId` has forbidden. */
   forbiddenOf(secretaryId: SessionId | string): SessionId[] {
-    return forbiddenOf(this.#state, secretaryId)
+    return forbiddenOf(this.orgState, secretaryId)
   }
 
   /** Whether `secretaryId` has forbidden `targetId`. */
@@ -123,74 +147,104 @@ export class OrgService extends Service implements OrgApi {
 
   /** The folded role of a session, or undefined when independent. */
   roleOf(sessionId: SessionId | string): OrgRole | undefined {
-    return roleOf(this.#state, sessionId)
+    return roleOf(this.orgState, sessionId)
   }
 
   // ── mutations (OrgApi) ────────────────────────────────────────────────────
 
   /**
-   * Take over a target session for a secretary. Appends `org/claim` to both
-   * logs (plus the self-describing role events the projections need).
+   * Take over a target session for a secretary. A cold (not-live) persisted
+   * session is first resumed through `ctx.agents.resume()` with the LEAD
+   * envelope composed in `setup`, so takeover works across a restart (§9).
+   * Appends `org/claim` to both logs (plus the self-describing role events the
+   * projections need).
    * @param secretary - the claiming agent.
    * @param targetId - the target session id.
-   * @throws when the target is unknown, is the caller itself, is managed by a
-   *   DIFFERENT secretary, or is forbidden to this secretary.
+   * @throws when the target is unknown and cannot be resumed, is the caller
+   *   itself, is managed by a DIFFERENT secretary, or is forbidden to this
+   *   secretary.
    */
-  claim(secretary: Agent, targetId: string): void {
+  async claim(secretary: Agent, targetId: string): Promise<void> {
     const id = toSessionId(targetId)
     if (id === secretary.id) {
       throw new Error(`dsh-org: a session cannot manage itself (${targetId})`)
     }
-    const target = this.ctx.sessions.get(id)
+    // Hard invariant check before any side effect (throws on conflict / forbidden).
+    grantClaim(this.orgState, secretary.id, id)
+    let target = this.ctx.sessions.get(id) ?? this.ctx.agents.get(id)?.session
     if (target === undefined) {
-      throw new Error(`dsh-org: cannot claim ${targetId}: no live session with that id`)
+      // Cold-session takeover: load the persisted session and give its agent
+      // the lead envelope at the only point the scope is still unpublished.
+      if (typeof this.ctx.agents.resume !== 'function') {
+        throw new Error(`dsh-org: cannot claim ${targetId}: no live session with that id (agent resume unavailable)`)
+      }
+      const handle = await this.ctx.agents.resume({
+        resumeSessionId: id,
+        setup: (agentCtx, leadAgent) => { applyLeadEnvelope(agentCtx, leadAgent, this.resolvedDeps) },
+      })
+      target = handle.agent.session
+    } else {
+      // A LIVE target has already joined its preset composition, so the
+      // envelope must be applied to its agent scope now — recording only the
+      // role would leave a lead with its full toolset (including bash and
+      // unrestricted writes).
+      const liveTarget = this.ctx.agents.get(id)
+      if (liveTarget !== undefined) applyLeadEnvelope(liveTarget.ctx, liveTarget, this.resolvedDeps)
     }
-    // Hard invariant check before any append (throws on conflict / forbidden).
-    grantClaim(this.#state, secretary.id, id)
-    this.#ensureRole(secretary.session, secretary.id, 'secretary')
+    this.ensureRole(secretary.session, secretary.id, 'secretary')
     secretary.session.append('org/claim', { secretaryId: secretary.id, targetId: id })
-    this.#ensureRole(target, id, 'lead')
+    this.ensureRole(target, id, 'lead')
     target.append('org/claim', { secretaryId: secretary.id, targetId: id })
   }
 
   /**
    * Release a management edge and clear the target's lead role (forbidden set
-   * untouched).
+   * untouched). The target's log receives the release whether it is live (via
+   * `Session.append`) or cold (via the persistence seam), so a resumed target
+   * does not keep showing the old claim/lead role from its stored history.
    * @param secretary - the releasing agent.
    * @param targetId - the managed session id.
    * @throws when the caller does not manage the target.
    */
-  relinquish(secretary: Agent, targetId: string): void {
+  async relinquish(secretary: Agent, targetId: string): Promise<void> {
     const id = toSessionId(targetId)
-    if (managerOf(this.#state, id) !== secretary.id) {
+    if (managerOf(this.orgState, id) !== secretary.id) {
       throw new Error(`dsh-org: ${secretary.id} does not manage ${targetId}; nothing to relinquish`)
     }
-    const wasLead = roleOf(this.#state, id) === 'lead'
-    const target = this.ctx.sessions.get(id)
+    const wasLead = roleOf(this.orgState, id) === 'lead'
     secretary.session.append('org/relinquish', { secretaryId: secretary.id, targetId: id })
-    if (target === undefined) return
-    if (wasLead) target.append('org/role', { sessionId: id })
-    target.append('org/relinquish', { secretaryId: secretary.id, targetId: id })
+    // Lift the mechanism-level envelope too: releasing the edge must give the
+    // live session its full toolset back, not just clear the folded role.
+    this.liftTargetEnvelope(id)
+    const drafts: TargetLogEvent[] = wasLead
+      ? [{ type: 'org/role', data: { sessionId: id } }, { type: 'org/relinquish', data: { secretaryId: secretary.id, targetId: id } }]
+      : [{ type: 'org/relinquish', data: { secretaryId: secretary.id, targetId: id } }]
+    await this.appendToTarget(id, drafts)
   }
 
   /**
    * Forbid the secretary from touching a target; when the secretary currently
    * owns it, the edge is released in the same operation ("release + forbid").
-   * Idempotent.
+   * Idempotent. The target's own log records the prohibition (`org/forbidden`,
+   * plus the release when owned) even when the target is cold, so a later
+   * resume/replay can never resurrect the forbidden edge.
    * @param secretary - the forbidding agent.
    * @param targetId - the session to forbid.
    */
-  forbid(secretary: Agent, targetId: string): void {
+  async forbid(secretary: Agent, targetId: string): Promise<void> {
     const id = toSessionId(targetId)
-    const owned = managerOf(this.#state, id) === secretary.id
-    const wasLead = roleOf(this.#state, id) === 'lead'
-    addForbidden(this.#state, secretary.id, id)
+    const owned = managerOf(this.orgState, id) === secretary.id
+    const wasLead = roleOf(this.orgState, id) === 'lead'
+    addForbidden(this.orgState, secretary.id, id)
     secretary.session.append('org/forbid', { secretaryId: secretary.id, targetId: id })
-    if (!owned) return
-    const target = this.ctx.sessions.get(id)
-    if (target === undefined) return
-    if (wasLead) target.append('org/role', { sessionId: id })
-    target.append('org/relinquish', { secretaryId: secretary.id, targetId: id })
+    const drafts: TargetLogEvent[] = []
+    if (owned) {
+      this.liftTargetEnvelope(id)
+      if (wasLead) drafts.push({ type: 'org/role', data: { sessionId: id } })
+      drafts.push({ type: 'org/relinquish', data: { secretaryId: secretary.id, targetId: id } })
+    }
+    drafts.push({ type: 'org/forbidden', data: { secretaryId: secretary.id, targetId: id } })
+    await this.appendToTarget(id, drafts)
   }
 
   /**
@@ -204,7 +258,7 @@ export class OrgService extends Service implements OrgApi {
     if (session === undefined) {
       throw new Error(`dsh-org: cannot set the role of ${sessionId}: no live session with that id`)
     }
-    if (this.#roleFromLog(session, sessionId) === role) return
+    if (this.roleFromLog(session, sessionId) === role) return
     session.append('org/role', role === undefined ? { sessionId } : { sessionId, role })
   }
 
@@ -223,10 +277,10 @@ export class OrgService extends Service implements OrgApi {
       sessionId,
       meta: { cwd },
       setup: (agentCtx, leadAgent) => {
-        applyLeadEnvelope(agentCtx, leadAgent, this.#deps)
+        applyLeadEnvelope(agentCtx, leadAgent, this.resolvedDeps)
       },
     })
-    this.claim(secretary, sessionId)
+    await this.claim(secretary, sessionId)
     const message = createUserMessage({
       content: [{ type: 'text', text: `<assignment lead="${escapeXml(input.name)}">${escapeXml(input.prompt)}</assignment>` }],
       source: { kind: 'dsh-org', form: 'notice', summary: `Opening brief for lead "${input.name}"` },
@@ -250,10 +304,13 @@ export class OrgService extends Service implements OrgApi {
    */
   assign(secretary: Agent, input: AssignInput): { taskId?: string } {
     const leadId = toSessionId(input.leadId)
-    if (managerOf(this.#state, leadId) !== secretary.id) {
+    if (isForbidden(this.orgState, secretary.id, leadId)) {
+      throw new Error(`dsh-org: assign_task: ${input.leadId} is forbidden to ${secretary.id}; it can never be assigned work`)
+    }
+    if (managerOf(this.orgState, leadId) !== secretary.id) {
       throw new Error(`dsh-org: assign_task: ${input.leadId} is not managed by ${secretary.id}; claim it first`)
     }
-    const board = this.#deps.taskBoard()
+    const board = this.resolvedDeps.taskBoard()
     const created = board === undefined ? undefined : board.create(secretary.session, { subject: input.subject, owner: leadId })
     secretary.session.append('org/assign', {
       secretaryId: secretary.id,
@@ -263,7 +320,7 @@ export class OrgService extends Service implements OrgApi {
       ...created === undefined ? {} : { taskId: created.id },
     })
     const body = `<assignment from="${escapeXml(secretary.id)}" subject="${escapeXml(input.subject)}">${escapeXml(input.brief)}</assignment>`
-    const peers = this.#deps.peers()
+    const peers = this.resolvedDeps.peers()
     if (peers !== undefined) {
       void peers.send(secretary, { targetId: leadId, content: body, delivery: 'wakeup' }).catch((error: unknown) => {
         this.ctx.logger.warn('dsh-org: assign_task delivery failed for %s: %o', input.leadId, error)
@@ -309,21 +366,104 @@ export class OrgService extends Service implements OrgApi {
 
   // ── internals ─────────────────────────────────────────────────────────────
 
+  /**
+   * Unwind a live target's role envelope when its management edge is released.
+   * A cold session has no live scope; its role events (and the controller's
+   * `agent/created` re-sync) decide what it gets on resume.
+   */
+  private liftTargetEnvelope(id: SessionId): void {
+    const agent = this.ctx.agents.get(id)
+    if (agent !== undefined) disposeEnvelope(agent)
+  }
+
+  /**
+   * Append release/forbid records to a target's own log. A live target appends
+   * through its `Session`; a cold one writes its stored log through the
+   * persistence seam, so the record survives until the target resumes.
+   * @param id - the target session.
+   * @param drafts - the events to append, in order.
+   */
+  private async appendToTarget(id: SessionId, drafts: readonly TargetLogEvent[]): Promise<void> {
+    if (drafts.length === 0) return
+    const live = this.ctx.sessions.get(id)
+    if (live !== undefined) {
+      this.appendLiveTarget(live, drafts)
+      return
+    }
+    await this.appendStoredTarget(id, drafts)
+  }
+
+  /** Append drafts to a live target's in-memory log (which folds and persists them). */
+  private appendLiveTarget(session: Session, drafts: readonly TargetLogEvent[]): void {
+    for (const draft of drafts) {
+      if (draft.type === 'org/role') session.append('org/role', draft.data)
+      else session.append(draft.type, draft.data)
+    }
+  }
+
+  /**
+   * Append drafts directly to a cold target's stored log. Events are marked
+   * `ignorable` because out-of-tree event vocabulary is outside the harness's
+   * known-type catalog (the documented compatibility mechanism); a reader that
+   * does not know `org/*` can then skip them instead of refusing the log.
+   * @param id - the cold target session.
+   * @param drafts - the events to append, in order.
+   */
+  private async appendStoredTarget(id: SessionId, drafts: readonly TargetLogEvent[]): Promise<void> {
+    const persistence = this.resolvedDeps.sessionPersistence()
+    if (persistence === undefined) return
+    let handle: PersistenceHandleProbe
+    try {
+      handle = await persistence.open(id, 'write')
+    } catch (error) {
+      // No stored log for that id: `/org forbid <unknown-id>` stays a valid,
+      // purely local prohibition, so there is simply nothing durable to write.
+      if (error instanceof Error && error.name === 'SessionPersistenceNotFoundError') return
+      // A resume may have won the race after the liveness check: append to the
+      // now-live session instead of writing behind its back.
+      const live = this.ctx.sessions.get(id)
+      if (live !== undefined) {
+        this.appendLiveTarget(live, drafts)
+        return
+      }
+      throw error
+    }
+    try {
+      let next = (await persistence.stat?.(id))?.eventCount
+      if (next === undefined) {
+        const { events } = await handle.read()
+        const last = events.at(-1)
+        next = last === undefined ? 0 : last.seq + 1
+      }
+      const batch = drafts.map((draft, index) => ({
+        type: draft.type,
+        seq: SessionSeq(next + index),
+        time: Date.now(),
+        data: draft.data,
+        ignorable: true,
+      } as SessionEvent))
+      await handle.append(batch)
+      await handle.flush()
+    } finally {
+      await handle.close()
+    }
+  }
+
   /** Fold a session's whole existing log into the state. */
-  #foldLog(session: Session): void {
-    let next = this.#state
+  private foldLog(session: Session): void {
+    let next = this.orgState
     for (const event of session.snapshotEvents()) next = applyOrgEvent(next, event)
-    this.#state = next
+    this.orgState = next
   }
 
   /** Fold one live event into the state. */
-  #applyEvent(_session: Session, event: SessionEvent): void {
-    this.#state = applyOrgEvent(this.#state, event)
+  private applyEvent(_session: Session, event: SessionEvent): void {
+    this.orgState = applyOrgEvent(this.orgState, event)
   }
 
   /** Append a self-describing role event when the session's OWN log does not already carry it. */
-  #ensureRole(session: Session, sessionId: SessionId, role: OrgRole): void {
-    if (this.#roleFromLog(session, sessionId) === role) return
+  private ensureRole(session: Session, sessionId: SessionId, role: OrgRole): void {
+    if (this.roleFromLog(session, sessionId) === role) return
     session.append('org/role', { sessionId, role })
   }
 
@@ -332,7 +472,7 @@ export class OrgService extends Service implements OrgApi {
    * a claim stamps `roles[target] = 'lead'` from the SECRETARY's event, but the
    * target's projection only learns its role from a role event on its own log.
    */
-  #roleFromLog(session: Session, sessionId: SessionId): OrgRole | undefined {
+  private roleFromLog(session: Session, sessionId: SessionId): OrgRole | undefined {
     let role: OrgRole | undefined
     for (const event of session.snapshotEvents()) {
       if (event.type === 'org/role' && event.data.sessionId === sessionId) role = event.data.role

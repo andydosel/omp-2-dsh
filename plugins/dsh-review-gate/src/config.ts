@@ -74,14 +74,6 @@ export const Config = z.object({
     .default('workspace-write'),
 })
 
-/** Detached copy of the schema's default values (what a session with no config sees). */
-export const DEFAULT_CONFIG: ResolvedReviewGateConfig = Object.freeze({
-  protectedPaths: Object.freeze([...DEFAULT_PROTECTED_PATHS]),
-  scratchDir: DEFAULT_SCRATCH_DIR,
-  defaultPolicy: 'off' as GatePolicy,
-  draftSandboxMode: 'workspace-write' as DraftSandboxMode,
-})
-
 /**
  * Validate raw configuration and return a detached resolved copy. Unknown keys
  * and invalid values fail at plugin load rather than silently degrading the

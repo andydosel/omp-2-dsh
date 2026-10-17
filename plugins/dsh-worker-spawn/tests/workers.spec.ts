@@ -24,7 +24,7 @@ describe('worker registry', () => {
     const harness = makeHarness(ctx, spawner)
     const child = Session.create(SessionId('w-roster'))
     const lastRosterState = (): string | undefined => harness.last()?.[0]?.state
-    // Real race: startContinuable dispatches the child's first turn/start
+    // Real race: startActivation dispatches the child's first turn/start
     // BEFORE registry.spawn registers the record, so the firehose listener
     // misses it. Seeding from the live log must surface `running`, not
     // 'starting' -> 'idle'.

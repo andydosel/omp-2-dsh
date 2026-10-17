@@ -3,7 +3,7 @@
  * events, the `questionBoard` session-projection declaration, and the
  * snapshot shape shared by the service, the projection, and the client view.
  *
- * Design: DESIGN-COORDINATOR-SUITE-V1.0.md §13.2 (question-board). Events stay
+ * Design: DESIGN-COORDINATOR-SUITE.md §13.2 (question-board). Events stay
  * log-only (no `surfaceOp`): the inbox is an out-of-band side channel, so
  * folding `question/*` never rewrites the conversation surface.
  *

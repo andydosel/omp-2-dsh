@@ -19,6 +19,7 @@ import path from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { escapeXml } from '@dsh-plugin/dsh-util/xml'
 import { matchesAnyPath, normalizeCandidate, normalizePattern, workspaceRoot } from './paths.ts'
 import type { FsProbe, OrgApi, OrgDeps } from './types.ts'
 
@@ -41,17 +42,6 @@ export const LEAD_TOOL_NAMES = ['report'] as const
 /** One text content block. */
 function text(value: string): ContentBlock {
   return { type: 'text', text: value }
-}
-
-/** Escape one XML text/value character (report/assignment wrappers). */
-export function escapeXml(value: string): string {
-  return value.replace(/[&<>"']/g, char => (
-    char === '&' ? '&amp;'
-      : char === '<' ? '&lt;'
-        : char === '>' ? '&gt;'
-          : char === '"' ? '&quot;'
-            : '&apos;'
-  ))
 }
 
 /**
@@ -103,7 +93,7 @@ function isMarkdown(candidate: string): boolean {
 
 // ── secretary tools ────────────────────────────────────────────────────────
 
-/** `org_claim({sessionId})` — take over a session; honours `strictTakeover`. */
+/** `org_claim({sessionId})` — take over a live or cold session; honours `strictMode`. */
 export function defineOrgClaimTool(org: OrgApi, deps: OrgDeps): ToolDefinition {
   return defineTool({
     name: 'org_claim',
@@ -125,10 +115,10 @@ export function defineOrgClaimTool(org: OrgApi, deps: OrgDeps): ToolDefinition {
     },
     execute: async (args, exec) => {
       const caller = requireAgent(exec, 'org_claim')
-      if (deps.config.strictTakeover) {
+      if (deps.config.strictMode) {
         const approval = deps.approval()
         if (approval === undefined) {
-          throw new Error('dsh-org: org_claim: strictTakeover is on but no approval service (ctx.approval) is composed')
+          throw new Error('dsh-org: org_claim: strictMode is on but no approval service (ctx.approval) is composed')
         }
         const outcome = await approval.request({
           agent: caller,
@@ -139,7 +129,7 @@ export function defineOrgClaimTool(org: OrgApi, deps: OrgDeps): ToolDefinition {
           throw new Error(`dsh-org: org_claim: takeover of ${args.sessionId} was not approved (${outcome})`)
         }
       }
-      org.claim(caller, args.sessionId)
+      await org.claim(caller, args.sessionId)
       return { sessionId: args.sessionId, managed: true }
     },
   })
@@ -166,7 +156,7 @@ export function defineOrgRelinquishTool(org: OrgApi, _deps: OrgDeps): ToolDefini
       render: (_args, value) => [text(`Released ${value.sessionId}: it is independent again.`)],
     },
     execute: async (args, exec) => {
-      org.relinquish(requireAgent(exec, 'org_relinquish'), args.sessionId)
+      await org.relinquish(requireAgent(exec, 'org_relinquish'), args.sessionId)
       return { sessionId: args.sessionId, released: true }
     },
   })
@@ -193,7 +183,7 @@ export function defineOrgForbidTool(org: OrgApi, _deps: OrgDeps): ToolDefinition
       render: (_args, value) => [text(`Forbidden: this session will not touch ${value.sessionId}.`)],
     },
     execute: async (args, exec) => {
-      org.forbid(requireAgent(exec, 'org_forbid'), args.sessionId)
+      await org.forbid(requireAgent(exec, 'org_forbid'), args.sessionId)
       return { sessionId: args.sessionId, forbidden: true }
     },
   })
@@ -310,19 +300,22 @@ export function defineReadProjectDocsTool(_org: OrgApi, deps: OrgDeps): ToolDefi
           `dsh-org: read_project_docs: "${args.path}" is outside the documented roots [${deps.config.secretaryReadPaths.join(', ')}].`,
         )
       }
+      exec.signal?.throwIfAborted()
       const target = fs.resolve(args.path, { cwd })
       const content = await fs.readText(target)
+      exec.signal?.throwIfAborted()
       return { path: args.path, content }
     },
   })
 }
 
-/** `project_structure({path?})` — a bounded directory tree (names only, no contents). */
+/** `project_structure({path?})` — a bounded directory tree plus a per-file symbol index (names only). */
 export function defineProjectStructureTool(_org: OrgApi, deps: OrgDeps): ToolDefinition {
   return defineTool({
     name: 'project_structure',
-    description: 'List a bounded directory tree (names and kinds only; never file contents) to understand the project '
-      + 'layout. node_modules and .git are skipped and the walk is depth- and size-limited.',
+    description: 'List a bounded directory tree plus a per-file symbol index (exported declaration names only; never '
+      + 'file contents) to understand the project layout and its public surface. node_modules and .git are skipped and '
+      + 'the walk plus the symbol scan are depth- and size-limited.',
     parameters: {
       path: { type: 'string', description: 'Directory to inspect (default: your workspace root).' },
     },
@@ -334,11 +327,27 @@ export function defineProjectStructureTool(_org: OrgApi, deps: OrgDeps): ToolDef
           root: { type: 'string', required: true },
           tree: { type: 'string', required: true },
           truncated: { type: 'boolean', required: true },
+          symbols: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                file: { type: 'string', required: true },
+                symbols: { type: 'array', required: true, items: { type: 'string' } },
+              },
+            },
+          },
+          symbolsTruncated: { type: 'boolean', required: true },
         },
       },
-      render: (_args, value) => [text(
-        `${value.root}${value.truncated ? ' (truncated)' : ''}\n${value.tree}`,
-      )],
+      render: (_args, value) => [text([
+        `${value.root}${value.truncated ? ' (truncated)' : ''}`,
+        value.tree,
+        '',
+        symbolSection(value.symbols, value.symbolsTruncated),
+      ].join('\n'))],
     },
     execute: async (args, exec) => {
       const caller = requireAgent(exec, 'project_structure')
@@ -347,9 +356,18 @@ export function defineProjectStructureTool(_org: OrgApi, deps: OrgDeps): ToolDef
       const requested = args.path === undefined || args.path.trim() === '' ? '.' : args.path
       const absRoot = path.isAbsolute(requested) ? requested : path.resolve(cwd, requested)
       const lines: string[] = []
+      const files: TreeFile[] = []
       const state = { truncated: false }
-      await renderTree(fs, fs.resolve(absRoot, { cwd }), absRoot, 0, lines, state)
-      return { root: absRoot, tree: lines.join('\n'), truncated: state.truncated }
+      exec.signal?.throwIfAborted()
+      await renderTree(fs, fs.resolve(absRoot, { cwd }), absRoot, absRoot, 0, lines, files, state, exec.signal)
+      const index = await indexSymbols(fs, files, absRoot, exec.signal)
+      return {
+        root: absRoot,
+        tree: lines.join('\n'),
+        truncated: state.truncated,
+        symbols: index.files,
+        symbolsTruncated: index.truncated,
+      }
     },
   })
 }
@@ -359,18 +377,153 @@ const TREE_SKIP: Record<string, true> = { node_modules: true, '.git': true }
 const TREE_MAX_DEPTH = 3
 const TREE_MAX_ENTRIES = 500
 
-/** Recursively append one bounded directory level (names only). */
+/** One source file discovered by the walk, addressed for the symbol scan. */
+interface TreeFile {
+  /** Workspace-relative display path (the symbol index's grouping key). */
+  readonly file: string
+  /** Absolute path used to read and resolve the file. */
+  readonly abs: string
+}
+
+/** A file's exported declaration names. */
+interface FileSymbols {
+  readonly file: string
+  readonly symbols: string[]
+}
+
+/** Source extensions the symbol scan reads (documentation and data files stay unread). */
+const SYMBOL_EXTENSIONS: Record<string, true> = {
+  '.ts': true, '.tsx': true, '.mts': true, '.cts': true,
+  '.js': true, '.jsx': true, '.mjs': true, '.cjs': true,
+}
+
+/** Bounds that keep the symbol index cheap and bounded (the tree is clipped independently). */
+const SYMBOL_MAX_FILES = 200
+const SYMBOL_MAX_PER_FILE = 40
+const SYMBOL_MAX_TOTAL = 1200
+const SYMBOL_MAX_SOURCE_CHARS = 512_000
+
+/**
+ * Exported declaration patterns. Matching is line-anchored and name-only: the
+ * captured text is the symbol, never the declaration body.
+ */
+const SYMBOL_PATTERNS: readonly RegExp[] = [
+  /^\s*export\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gm,
+  /^\s*export\s+(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/gm,
+  /^\s*export\s+(?:declare\s+)?interface\s+([A-Za-z_$][\w$]*)/gm,
+  /^\s*export\s+(?:declare\s+)?type\s+([A-Za-z_$][\w$]*)/gm,
+  /^\s*export\s+(?:declare\s+)?(?:const|let|var|enum)\s+([A-Za-z_$][\w$]*)/gm,
+  /^\s*export\s+default\s+(?:async\s+)?(?:class|function)\s+([A-Za-z_$][\w$]*)/gm,
+  /^\s*export\s*\{([^}]*)\}/gm,
+]
+
+/**
+ * Extract exported declaration names from one source text, in declaration
+ * order and deduplicated. `export { a, b as c }` contributes the exported
+ * names (`a`, `c`), never aliases that stay private.
+ * @param source - the file's text.
+ * @returns the exported names (at most `SYMBOL_MAX_PER_FILE`).
+ */
+function extractSymbols(source: string): string[] {
+  const found: string[] = []
+  const seen = new Set<string>()
+  const add = (name: string): void => {
+    if (seen.has(name) || found.length >= SYMBOL_MAX_PER_FILE) return
+    seen.add(name)
+    found.push(name)
+  }
+  for (const pattern of SYMBOL_PATTERNS) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1] === undefined) continue
+      if (pattern.source.includes('\\{')) {
+        // `export { a, b as c }`: the clause is everything between the braces.
+        for (const clause of match[1].split(',')) {
+          const parts = clause.trim().split(/\s+as\s+/)
+          const exported = (parts[1] ?? parts[0])?.trim()
+          if (exported !== undefined && /^[A-Za-z_$][\w$]*$/.test(exported)) add(exported)
+        }
+        continue
+      }
+      add(match[1])
+    }
+  }
+  return found
+}
+
+/**
+ * Build the per-file symbol index over the files the tree walk discovered.
+ * Each source file is read once; the returned names are the only code-derived
+ * output (bodies never leave this function). A file that cannot be read is
+ * skipped rather than failing the structure query.
+ * @param fs - the filesystem seam.
+ * @param files - source and non-source files discovered by the walk.
+ * @param root - the walk root (resolve cwd for the read targets).
+ * @param signal - cancellation for the scan.
+ * @returns the per-file index (only files with symbols appear) and whether a bound clipped it.
+ */
+async function indexSymbols(
+  fs: FsProbe,
+  files: readonly TreeFile[],
+  root: string,
+  signal: AbortSignal | undefined,
+): Promise<{ files: FileSymbols[]; truncated: boolean }> {
+  const index: FileSymbols[] = []
+  let scanned = 0
+  let total = 0
+  let truncated = false
+  for (const file of files) {
+    signal?.throwIfAborted()
+    if (SYMBOL_EXTENSIONS[path.extname(file.file).toLowerCase()] !== true) continue
+    if (scanned >= SYMBOL_MAX_FILES || total >= SYMBOL_MAX_TOTAL) {
+      truncated = true
+      break
+    }
+    scanned += 1
+    let source: string
+    try {
+      source = await fs.readText(fs.resolve(file.abs, { cwd: root }))
+    } catch {
+      continue
+    }
+    if (source.length > SYMBOL_MAX_SOURCE_CHARS) {
+      truncated = true
+      continue
+    }
+    const symbols = extractSymbols(source)
+    if (symbols.length === 0) continue
+    total += symbols.length
+    index.push({ file: file.file, symbols })
+  }
+  return { files: index, truncated }
+}
+
+/** Render the symbol index section (one line per file). */
+function symbolSection(symbols: readonly FileSymbols[], truncated: boolean): string {
+  if (symbols.length === 0) return 'Symbols (exported declarations): (none found in scanned source files)'
+  const lines = [
+    `Symbols (exported declarations${truncated ? ', truncated' : ''}):`,
+    ...symbols.map(entry => `${entry.file}: ${entry.symbols.join(', ')}`),
+  ]
+  return lines.join('\n')
+}
+
+/** Recursively append one bounded directory level (names only) and collect its files. */
 async function renderTree(
   fs: FsProbe,
   target: unknown,
+  root: string,
   absDir: string,
   depth: number,
   lines: string[],
+  files: TreeFile[],
   state: { truncated: boolean },
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   if (state.truncated) return
+  signal?.throwIfAborted()
   const entries = [...await fs.listDir(target)].sort((a, b) => a.name.localeCompare(b.name))
   for (const entry of entries) {
+    signal?.throwIfAborted()
     if (TREE_SKIP[entry.name] === true) continue
     if (lines.length >= TREE_MAX_ENTRIES) {
       state.truncated = true
@@ -378,9 +531,11 @@ async function renderTree(
     }
     const marker = entry.type === 'directory' ? '/' : entry.type === 'other' ? ' ~' : ''
     lines.push(`${'  '.repeat(depth)}${entry.name}${marker}`)
+    const child = `${absDir}/${entry.name}`
     if (entry.type === 'directory' && depth < TREE_MAX_DEPTH) {
-      const child = `${absDir}/${entry.name}`
-      await renderTree(fs, fs.resolve(child, { cwd: absDir }), child, depth + 1, lines, state)
+      await renderTree(fs, fs.resolve(child, { cwd: absDir }), root, child, depth + 1, lines, files, state, signal)
+    } else if (entry.type === 'file') {
+      files.push({ file: child.slice(root.length + 1), abs: child })
     }
   }
 }

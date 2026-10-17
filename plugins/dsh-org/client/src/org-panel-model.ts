@@ -16,7 +16,7 @@
  * @module @dsh-plugin/dsh-org/client/org-panel-model
  */
 
-import type { OrgProjectionView } from '../../src/types.ts'
+import type { OrgNotice, OrgProjectionView } from '../../src/types.ts'
 
 /** What the org panel renders for one session's `org` projection. */
 export interface OrgPanelModel {
@@ -28,6 +28,30 @@ export interface OrgPanelModel {
   readonly hidden: readonly string[]
   /** Every session this secretary forbade, in forbid order (the read-only footer). */
   readonly forbidden: readonly string[]
+  /** Durable `notify_user` notes, oldest first (the human-visible notice band). */
+  readonly notices: readonly OrgNotice[]
+}
+
+/** The global session list's organisation relation marker. */
+export interface OrgSessionMark {
+  /** `managed`: a secretary holds the edge; `orphan`: a lead whose manager edge is gone. */
+  readonly kind: 'managed' | 'orphan'
+  /** User-visible text ("归 X 管" / "孤儿"). */
+  readonly label: string
+}
+
+/**
+ * Derive the relation marker shown beside one session in the GLOBAL session
+ * list. Independent sessions (no role, no manager) carry no marker: the list
+ * only labels the organisation structure that exists, never every session.
+ * @param view - that session's `org` projection, or undefined when absent.
+ * @returns the marker, or undefined for an independent/unmanaged session.
+ */
+export function orgSessionMark(view: OrgProjectionView | undefined): OrgSessionMark | undefined {
+  if (view === undefined) return undefined
+  if (view.managedBy !== null) return { kind: 'managed', label: `归 ${view.managedBy} 管` }
+  if (view.role === 'lead') return { kind: 'orphan', label: '孤儿' }
+  return undefined
 }
 
 /**
@@ -38,7 +62,15 @@ export interface OrgPanelModel {
  *   a managed session nor a forbidden one.
  */
 export function orgPanelModel(view: OrgProjectionView | undefined): OrgPanelModel | undefined {
-  if (view === undefined || view.role !== 'secretary') return undefined
+  if (view === undefined) return undefined
+  const notices = view.notices
+  if (view.role !== 'secretary') {
+    // A note outlives the secretary role: `notify_user` must stay visible to
+    // the human even after `/org off` clears the role.
+    return notices.length === 0
+      ? undefined
+      : { role: view.role, rows: [], hidden: [], forbidden: [], notices }
+  }
   const forbidden = new Set(view.forbidden)
   const rows: string[] = []
   const hidden: string[] = []
@@ -46,6 +78,6 @@ export function orgPanelModel(view: OrgProjectionView | undefined): OrgPanelMode
     if (forbidden.has(id)) hidden.push(id)
     else rows.push(id)
   }
-  if (rows.length === 0 && view.forbidden.length === 0) return undefined
-  return { role: view.role, rows, hidden, forbidden: view.forbidden }
+  if (rows.length === 0 && view.forbidden.length === 0 && notices.length === 0) return undefined
+  return { role: view.role, rows, hidden, forbidden: view.forbidden, notices }
 }

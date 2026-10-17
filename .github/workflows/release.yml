@@ -1,7 +1,7 @@
 # release.yml — build the dsh plugin suite on a version tag and attach the
 # produced zip to the GitHub Release.
 #
-# Mirrors scripts/release.ps1 locally (build all 14 packages in dependency order,
+# Mirrors scripts/release.ps1 locally (build all 15 packages in dependency order,
 # then zip) as the "build-on-tag -> upload asset" automation path. It assumes a
 # single root pnpm workspace (pnpm-workspace.yaml -> plugins/*) governing every
 # package, and that the release tooling lives under scripts/.
@@ -30,14 +30,15 @@ jobs:
           node-version: 24
           cache: 'pnpm'
 
-      # One root workspace resolves all 14 packages (compact-mode pulls
-      # tree-engine, orchestrator pulls worker-spawn + advisor, all via
-      # workspace:*); a single install covers the whole suite.
+      # One root workspace resolves all 15 packages (compact-mode pulls
+      # tree-engine, orchestrator pulls worker-spawn + advisor, every path/gate
+      # plugin pulls dsh-util, all via workspace:*); a single install covers
+      # the whole suite.
       - name: Install
         shell: pwsh
         run: pnpm install --frozen-lockfile
 
-      # Build all 14 + package the zip. Derive the bare version from the tag
+      # Build all 15 + package the zip. Derive the bare version from the tag
       # (strip the leading 'v') so the zip and Release tag stay in lockstep.
       - name: Build and package
         shell: pwsh

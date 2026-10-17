@@ -57,8 +57,15 @@ interface CommandAdmission {
  * @returns null on admitted execution; a user-visible failure line otherwise.
  */
 async function executeCommand(ctx: Context, sessionId: SessionId, line: string): Promise<string | null> {
-  const execute = ctx.remote.commands.execute as unknown as (agentId: SessionId, line: string) => Promise<CommandAdmission>
-  const result = await execute(sessionId, line)
+  // 0.2.1's `commands/execute` remote requires `(agentId, line,
+  // submittedAttachments[, signal])`; omitting the attachment batch fails
+  // client-side arity validation (`expected 3 business argument(s), got 2`).
+  const execute = ctx.remote.commands.execute as unknown as (
+    agentId: SessionId,
+    line: string,
+    submittedAttachments: readonly unknown[],
+  ) => Promise<CommandAdmission>
+  const result = await execute(sessionId, line, [])
   if (!result.ok) return `${result.error?.message ?? 'command failed'} (${result.error?.code ?? 'unknown'})`
   const outcome = result.value?.result
   if (outcome === undefined) return `unknown command: ${line}`

@@ -1,11 +1,11 @@
 /**
  * dsh-question-board: the asynchronous, non-blocking question inbox
- * (DESIGN-COORDINATOR-SUITE-V1.0.md §5.4 / §13.2).
+ * (DESIGN-COORDINATOR-SUITE.md §5.4 / §13.2).
  *
  * - durable events: `question/asked`, `question/answered`, `question/dismissed`
  * - tool: `ask_question({content, options?, blocking?}) -> {id}` — registers
  *   into the inbox and returns at once; it never prints a long question
- * - service: `ctx.questionBoard.ask/answer/dismiss/list`
+ * - service: `ctx.questionBoard.runtime.ask/answer/dismiss/list`
  * - projection: `questionBoard` (a `QuestionSnapshot[]`, whole-value fold over
  *   `question/*`) with a client wire view
  * - delivery: a blocking answer wakes the asker (`steer` while running,

@@ -1,6 +1,6 @@
 /**
  * `@dsh-plugin/dsh-orchestrator` — the coordinator suite's review loop and
- * recursive fan-out (DESIGN-COORDINATOR-SUITE-V1.0.md §5.5, §5.7, §13.5).
+ * recursive fan-out (DESIGN-COORDINATOR-SUITE.md §5.5, §5.7, §13.5).
  *
  * Two halves, one spawn base:
  *
@@ -27,7 +27,7 @@
  * @module @dsh-plugin/dsh-orchestrator
  */
 
-import { Service, type Context } from '@deepseek-ai/cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import { resolveConfig, type OrchestratorConfig, type ResolvedOrchestratorConfig } from './config.ts'
 import { OrchestratorRuntime } from './runtime.ts'
 import type { OrchestratorStatus } from './runtime.ts'
@@ -96,26 +96,18 @@ export { defineOrchestratorTools } from './tools.ts'
 // programs consuming the declarations still receive the merge.
 export type * from './types.ts'
 
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    orchestrator: OrchestratorService
-  }
-}
-
 /**
- * The orchestrator plugin entry (cordis Service class). Registers the eight
- * model-facing tools on the plugin's context and exposes the runtime as
- * `ctx.orchestrator` for programmatic access (the sibling plugins read the
- * loop status through it).
+ * The orchestrator plugin entry. Registers the eight model-facing tools on the
+ * plugin's context; the runtime is reachable through {@link OrchestratorService.status}
+ * for tests and diagnostics.
  */
-export class OrchestratorService extends Service {
+export class OrchestratorService {
   static inject = ['agents', 'goals', 'subagents', 'tools'] as const
 
   readonly runtime: OrchestratorRuntime
   readonly resolved: ResolvedOrchestratorConfig
 
   constructor(ctx: Context, config: OrchestratorConfig = {}) {
-    super(ctx, 'orchestrator')
     this.resolved = resolveConfig(config)
     this.runtime = new OrchestratorRuntime(ctx, this.resolved)
     for (const tool of defineOrchestratorTools(this.runtime)) {

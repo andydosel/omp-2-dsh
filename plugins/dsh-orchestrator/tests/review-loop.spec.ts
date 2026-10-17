@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { resolveConfig } from '../src/config.ts'
 import { ReviewLoop } from '../src/loop.ts'
 import { renderFinding, type RawFinding } from '../src/findings.ts'
 import { makeAgent, makeHarness, type FakeAgent, type Harness } from './harness.ts'
@@ -20,11 +21,17 @@ async function startLoop(harness: Harness): Promise<{ lead: FakeAgent; carrier: 
 describe('loop start', () => {
   it('spawns the review-work subagent, creates the goal on ITS session, and never on the lead', async () => {
     const harness = makeHarness({ reviewersPerRound: 3, maxGoalRounds: 12 })
-    const { lead } = await startLoop(harness)
+    const { lead, carrier } = await startLoop(harness)
     expect(harness.starts).toHaveLength(1)
     expect(harness.starts[0]).toMatchObject({ provider: 'spawn', parentId: 'lead' })
     expect(harness.starts[0]!.label).toMatch(/^review loop: harden the parser/)
     expect(harness.starts[0]!.prompt).toMatch(/review_round/)
+    // The carrier is a worker, but its envelope must still carry the loop's
+    // OWN controls — otherwise a restricted carrier cannot run a round or exit.
+    expect(carrier.restricts[0]).toEqual(expect.arrayContaining([
+      'read', 'write', 'edit', 'subtask_parallel',
+      'review_round', 'review_filter', 'review_finish', 'review_complete', 'review_block', 'review_resume',
+    ]))
     expect(harness.goals.calls).toEqual([
       { op: 'create', agentId: 'carrier-1', detail: { objective: 'harden the parser', maxGoalRounds: 12 } },
     ])
@@ -94,14 +101,23 @@ describe('review rounds', () => {
     await expect(harness.runtime.round(carrier, { plan: '   ' }, signal)).rejects.toThrow(/plan text/)
   })
 
-  it('takes the reviewer count from review-gate\'s --workers when the call does not ask for one', async () => {
+  it('takes --workers from the ORIGINATING session, never from the carrier', async () => {
     const harness = makeHarness({ reviewersPerRound: 3 })
     const { carrier, signal } = await startLoop(harness)
     let flagged = 5
-    harness.ctx.provide('reviewGate', { stateOf: () => ({ reviewers: flagged }) } as never)
+    const seen: string[] = []
+    harness.ctx.provide('reviewGate', {
+      stateOf: (session: { id: string }) => {
+        seen.push(String(session.id))
+        // The carrier's own gate says 0: only the lead's flag may count.
+        return { reviewers: String(session.id) === 'lead' ? flagged : 0 }
+      },
+    } as never)
     for (let index = 0; index < 8; index += 1) harness.dispatcher.queueFindings([])
     // The human's flag wins over the deployment default...
     expect((await harness.runtime.round(carrier, { plan: 'p' }, signal)).record.dispatched).toBe(5)
+    expect(seen).toContain('lead')
+    expect(seen).not.toContain('carrier-1')
     // ...but a model-requested count stays bounded by the deployment default.
     expect((await harness.runtime.round(carrier, { plan: 'p', reviewers: 9 }, signal)).record.dispatched).toBe(3)
     // A gate with no explicit flag (0) falls back to the default.
@@ -170,6 +186,87 @@ describe('the zero-P0 exit', () => {
     expect(harness.runtime.finish(carrier).loop.status).toBe('cleared')
   })
 
+  it('lets the delegating lead filter false positives and writes rounds/findings to its board', async () => {
+    const harness = makeHarness({ reviewersPerRound: 1 })
+    const { lead, carrier, signal } = await startLoop(harness)
+    const updates: Array<{ sessionId: string; id: string; patch: Record<string, unknown> }> = []
+    harness.ctx.provide('taskBoard', {
+      list: () => [{ id: 'task-1', revision: 2, status: 'in_progress' }],
+      update: (session: { id: string }, id: string, patch: Record<string, unknown>) => {
+        updates.push({ sessionId: String(session.id), id, patch })
+        return { id, revision: 3, status: 'in_progress' }
+      },
+    } as never)
+
+    harness.dispatcher.queueFindings([finding('P0', 'stale claim'), finding('P1', 'slow query')])
+    await harness.runtime.round(carrier, { plan: 'p' }, signal)
+    expect(updates[0]).toMatchObject({
+      sessionId: 'lead',
+      id: 'task-1',
+      patch: {
+        reviewRound: 1,
+        findings: [
+          { severity: 'P0', summary: 'stale claim', sourceRound: 1 },
+          { severity: 'P1', summary: 'slow query', sourceRound: 1 },
+        ],
+      },
+    })
+
+    // The LEAD (not only the carrier) may remove a finding.
+    const filtered = harness.runtime.filter(lead, [{ severity: 'P0', summary: 'stale claim' }])
+    expect(filtered.removed).toHaveLength(1)
+    expect(updates.at(-1)?.patch).toMatchObject({
+      findings: [{ severity: 'P1', summary: 'slow query', sourceRound: 1 }],
+      filteredFindings: [{ severity: 'P0', summary: 'stale claim', sourceRound: 1 }],
+    })
+    // An unrelated agent still cannot filter.
+    const stranger = harness.addAgent(makeAgent('stranger'))
+    expect(() => harness.runtime.filter(stranger, [{ severity: 'P1', summary: 'slow query' }]))
+      .toThrow(/not carrying or leading/)
+  })
+
+  it('creates the lead\'s task row when the board has none, then accumulates findings across rounds', async () => {
+    const harness = makeHarness({ reviewersPerRound: 1 })
+    const { lead, carrier, signal } = await startLoop(harness)
+    const creates: Array<{ sessionId: string; subject: string; owner?: string }> = []
+    const updates: Array<{ id: string; patch: Record<string, unknown> }> = []
+    let rows: Array<{ id: string; revision: number; status: string }> = []
+    harness.ctx.provide('taskBoard', {
+      list: () => rows,
+      create: (session: { id: string }, input: { subject: string; owner?: string }) => {
+        creates.push({ sessionId: String(session.id), ...input })
+        const created = { id: 'task-9', revision: 1, status: 'pending' }
+        rows = [created]
+        return created
+      },
+      update: (_session: { id: string }, id: string, patch: Record<string, unknown>) => {
+        updates.push({ id, patch })
+        const current = rows.find(row => row.id === id)!
+        const next = { ...current, revision: current.revision + 1, status: (patch.status as string | undefined) ?? current.status }
+        rows = [next]
+        return next
+      },
+    } as never)
+
+    harness.dispatcher.queueFindings([finding('P0', 'first')])
+    await harness.runtime.round(carrier, { plan: 'p1' }, signal)
+    expect(creates).toEqual([{ sessionId: 'lead', subject: 'harden the parser', owner: 'lead' }])
+    expect(updates[0]!.patch).toMatchObject({ reviewRound: 1, findings: [{ summary: 'first', sourceRound: 1 }] })
+
+    harness.dispatcher.queueFindings([finding('P1', 'second')])
+    await harness.runtime.round(carrier, { plan: 'p2' }, signal)
+    // One task row, and the union of both rounds (cross-round accumulation).
+    expect(creates).toHaveLength(1)
+    expect(updates.at(-1)!.patch).toMatchObject({
+      reviewRound: 2,
+      findings: [
+        { severity: 'P0', summary: 'first', sourceRound: 1 },
+        { severity: 'P1', summary: 'second', sourceRound: 2 },
+      ],
+    })
+    expect(lead.id).toBe('lead')
+  })
+
   it('reports an unmatched rejection instead of silently dropping it', async () => {
     const harness = makeHarness({ reviewersPerRound: 1 })
     const { carrier, signal } = await startLoop(harness)
@@ -189,7 +286,7 @@ describe('the zero-P0 exit', () => {
     harness.runtime.finish(carrier)
     harness.goals.failNext = new Error('stale goal revision')
     await expect(harness.runtime.complete(carrier)).rejects.toThrow(/stale goal revision/)
-    expect(harness.runtime.loopSnapshot('carrier-1' as SessionId)?.status).toBe('cleared')
+    expect(harness.runtime.status().loops[0]?.status).toBe('cleared')
   })
 })
 
@@ -197,15 +294,20 @@ describe('the human-decision exit', () => {
   it('blocks the goal, refuses rounds while waiting, and resumes', async () => {
     const harness = makeHarness({ reviewersPerRound: 1 })
     const { carrier, signal } = await startLoop(harness)
-    const blocked = harness.runtime.block(carrier, { code: 'scope-tradeoff', message: 'drop feature X?' })
+    const blocked = await harness.runtime.block(carrier, { code: 'scope-tradeoff', message: 'drop feature X?' })
     expect(blocked.goal).toEqual({ id: 'goal-carrier-1', phase: 'blocked' })
     expect(blocked.loop.status).toBe('blocked')
     expect(blocked.loop.blockedReason).toEqual({ code: 'scope-tradeoff', message: 'drop feature X?' })
+    expect(blocked.reported).toBe(true)
     expect(harness.goals.ops()).toEqual(['create', 'get', 'block'])
+    // Exit B relays the decision to the delegating session (the carrier's parent).
+    expect(harness.sent.at(-1)).toMatchObject({ senderId: 'carrier-1', targetId: 'lead' })
+    expect(harness.sent.at(-1)!.text).toMatch(/drop feature X\?/)
+    expect(harness.sent.at(-1)!.text).toMatch(/scope-tradeoff/)
 
     expect(() => harness.runtime.finish(carrier)).toThrow(/is blocked/)
     await expect(harness.runtime.round(carrier, { plan: 'p' }, signal)).rejects.toThrow(/blocked/)
-    expect(() => harness.runtime.block(carrier, { code: 'again', message: 'x' })).toThrow(/already blocked/)
+    await expect(harness.runtime.block(carrier, { code: 'again', message: 'x' })).rejects.toThrow(/already blocked/)
 
     const resumed = harness.runtime.resume(carrier)
     expect(resumed.goal.phase).toBe('active')
@@ -228,10 +330,13 @@ describe('authority', () => {
     const stranger = harness.addAgent(makeAgent('stranger'))
     for (const agent of [lead, stranger]) {
       expect(() => harness.runtime.finish(agent)).toThrow(/not carrying a review loop/)
-      expect(() => harness.runtime.filter(agent, [finding('P0', 'x')])).toThrow(/not carrying a review loop/)
-      expect(() => harness.runtime.block(agent, { code: 'x', message: 'y' })).toThrow(/not carrying a review loop/)
+      await expect(harness.runtime.block(agent, { code: 'x', message: 'y' })).rejects.toThrow(/not carrying a review loop/)
       await expect(harness.runtime.round(agent, { plan: 'p' }, signal)).rejects.toThrow(/not carrying a review loop/)
     }
+    // The LEAD may filter (the business filter belongs to the delegating
+    // session), but an unrelated agent may not.
+    expect(() => harness.runtime.filter(stranger, [finding('P0', 'x')])).toThrow(/not carrying or leading/)
+    expect(() => harness.runtime.filter(lead, [finding('P0', 'x')])).not.toThrow()
     // The carrier itself is accepted.
     harness.dispatcher.queueFindings([])
     await expect(harness.runtime.round(carrier, { plan: 'p' }, signal)).resolves.toBeDefined()
@@ -244,6 +349,12 @@ describe('authority', () => {
     await harness.runtime.round(carrier, { plan: 'p' }, signal)
     harness.runtime.dispose()
     expect(harness.runtime.loopCount).toBe(0)
+  })
+})
+
+describe('configuration', () => {
+  it('fails loud on an unknown key instead of silently merging it', () => {
+    expect(() => resolveConfig({ reviewrTools: ['read'] } as never)).toThrow(/unknown key/)
   })
 })
 

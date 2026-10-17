@@ -81,6 +81,7 @@ New-Item -ItemType Directory -Force -Path $suiteState | Out-Null
 # node_modules, so the folder name must match the package name (note:
 # `tree-engine`, whose repo dir is `dsh-tree-engine`, ships as `tree-engine/`).
 $plugins       = @(
+    'dsh-util',
     'dsh-worker-spawn', 'tree-engine', 'dsh-compact-mode',
     'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat',
     'dsh-mode-ui', 'dsh-review-gate', 'dsh-question-board',

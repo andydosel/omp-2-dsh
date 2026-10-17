@@ -117,6 +117,11 @@ export function defineSubtaskParallelTool(runtime: OrchestratorRuntime): ToolDef
             brief: { type: 'string', required: true, description: 'The complete self-contained task prompt for that child.' },
             model: { type: 'string', enum: ['fast', 'good'], description: 'Dispatch tier: fast = mechanical, good = judgment (default).' },
             role: { type: 'string', enum: ['worker', 'reviewer'], description: 'worker (default) = durable implementation child; reviewer = one-shot read-only clean reviewer.' },
+            toolFilter: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional tool allow-list for a worker (design §5.10). It can only narrow the worker toolset; names outside the worker vocabulary are ignored.',
+            },
           },
         },
       },
@@ -177,7 +182,7 @@ export function defineSubtaskParallelTool(runtime: OrchestratorRuntime): ToolDef
         ...args.maxTotalAgents === undefined ? {} : { maxTotalAgents: args.maxTotalAgents },
       })
       if (plan.kind === 'do-it-yourself') refuseFanOut(plan)
-      const results = await runtime.runSubtasks(agent, plan.tasks, exec.signal)
+      const results = await runtime.runSubtasks(agent, plan, exec.signal)
       return {
         results: results.map(result => ({
           taskIndex: result.taskIndex,
@@ -316,6 +321,7 @@ export function defineReviewFilterTool(runtime: OrchestratorRuntime): ToolDefini
   return defineTool({
     name: 'review_filter',
     description: 'Remove findings from the accepted union, so they stop counting toward the verdict. '
+      + 'The delegating lead or the review-work carrier may call this (pass loopId when you lead several loops). '
       + 'Use reason "false-positive" for a finding you PROVED wrong (open the code and check), and "resolved" for one your revised plan now answers. '
       + 'Match a finding by its exact severity and summary as reported. The union is cumulative across rounds, so a P0 stays counted until you remove it here — '
       + 'but a wrongly removed P0 is a review that lied.',
@@ -335,6 +341,7 @@ export function defineReviewFilterTool(runtime: OrchestratorRuntime): ToolDefini
         },
       },
       note: { type: 'string', description: 'Why these left the union (kept in the transcript for the audit).' },
+      loopId: { type: 'string', description: 'The loop to filter when you lead more than one; the carrier may omit it.' },
     },
     output: {
       schema: {
@@ -362,7 +369,7 @@ export function defineReviewFilterTool(runtime: OrchestratorRuntime): ToolDefini
         summary: finding.summary,
         ...finding.reason === undefined ? {} : { reason: finding.reason },
       }))
-      const result = runtime.filter(agent, reject)
+      const result = runtime.filter(agent, reject, args.loopId)
       return {
         removed: result.removed.map(findingRow),
         unmatched: result.unmatched.map(rawRow),
@@ -486,7 +493,7 @@ export function defineReviewBlockTool(runtime: OrchestratorRuntime): ToolDefinit
     async execute(args, exec) {
       const agent = requireAgent(exec)
       const reason: GoalBlockReason = { code: args.code, message: args.message }
-      const result = runtime.block(agent, reason)
+      const result = await runtime.block(agent, reason, exec.signal)
       return { goalId: result.goal.id, phase: result.goal.phase, code: reason.code, message: reason.message }
     },
   })

@@ -1,7 +1,7 @@
 /**
  * Orchestrator plugin configuration: the schemastery schema the loader
  * validates, and the detached fully-resolved shape the runtime consumes
- * (DESIGN-COORDINATOR-SUITE-V1.0.md §6 `orchestrator` row, §13.5).
+ * (DESIGN-COORDINATOR-SUITE.md §6 `orchestrator` row, §13.5).
  *
  * The four design-owned knobs are `reviewersPerRound`, `reviewerTools`,
  * `zeroP0Approach` and `fanOut`. Four further fields exist because the
@@ -122,6 +122,12 @@ function nonNegativeInteger(value: unknown, field: string): number {
  * @returns the validated configuration with every default materialized.
  */
 export function resolveConfig(config: OrchestratorConfig = {}): ResolvedOrchestratorConfig {
+  const known = new Set(Object.keys(Config({} as OrchestratorConfig) as object))
+  for (const key of Object.keys(config)) {
+    if (!known.has(key)) {
+      throw new Error(`OrchestratorConfig has unknown key "${key}" (known: ${[...known].join(', ')})`)
+    }
+  }
   const raw = Config(config) as OrchestratorConfig
   const reviewersPerRound = positiveInteger(raw.reviewersPerRound ?? 3, 'reviewersPerRound')
   const reviewerTools = [...(raw.reviewerTools ?? ['read', 'grep', 'glob'])]

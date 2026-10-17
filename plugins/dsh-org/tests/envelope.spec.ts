@@ -54,6 +54,7 @@ describe('role envelope', () => {
     expect(agentCtx.restrictSpy).toHaveBeenCalledTimes(1)
     expect(allowList(agentCtx.restrictSpy)).toEqual([
       'peer_send', 'task_new', 'task_update', 'task_close', 'task_reopen', 'task_list', 'ask_question', 'todo_write',
+      'write', 'edit',
     ])
     expect(allowList(agentCtx.restrictSpy)).not.toContain('read')
     expect(allowList(agentCtx.restrictSpy)).not.toContain('bash')
@@ -62,6 +63,31 @@ describe('role envelope', () => {
     expect(agentCtx.sectionSpy).toHaveBeenCalledTimes(1)
     expect(agentCtx.sectionSpy.mock.calls[0]?.[0]).toMatchObject({ name: 'dsh-org-role-secretary' })
     expect(isEnvelopeApplied(agent)).toBe(true)
+  })
+
+  it('keeps bash out of the lead mask (the path gate cannot police a shell)', () => {
+    const { org, agent, agentCtx } = rig('lead')
+
+    applyLeadEnvelope(scopeOf(agentCtx), agent, org.deps)
+
+    const allow = allowList(agentCtx.restrictSpy)
+    expect(allow).not.toContain('bash')
+    expect(allow).toEqual(expect.arrayContaining(['read', 'write', 'edit', 'subtask_parallel']))
+  })
+
+  it('confines the secretary write/edit tools to the handoff area', async () => {
+    const { org, agent, agentCtx } = rig('sec')
+    applySecretaryEnvelope(scopeOf(agentCtx), agent, org.deps)
+    const listener = agentCtx.listeners.get('tools/pre-execute')?.[0]
+    expect(listener).toBeDefined()
+    const next = async (): Promise<{ kind: 'allow' }> => ({ kind: 'allow' })
+
+    const denied = await listener!({ name: 'write', arguments: { file_path: 'docs/design.md' } }, next)
+    expect(denied).toMatchObject({ kind: 'deny' })
+    const handoff = await listener!({ name: 'write', arguments: { file_path: '.dsh-handoff/brief.md' } }, next)
+    expect(handoff).toEqual({ kind: 'allow' })
+    const source = await listener!({ name: 'edit', arguments: { file_path: 'src/app.ts' } }, next)
+    expect(source).toMatchObject({ kind: 'deny' })
   })
 
   it('keeps bash for the secretary only when secretaryBash is configured', () => {
@@ -95,14 +121,14 @@ describe('role envelope', () => {
     expect(registeredNames(agentCtx.registerSpy)).toEqual(['report', ...SECRETARY_TOOL_NAMES])
   })
 
-  it('/org off lifts every installed effect and /org on re-installs it', () => {
+  it('/org off lifts every installed effect and /org on re-installs it', async () => {
     const { org, agent, agentCtx } = rig('sec')
 
-    expect(orgCommandHandler(org, org.deps, { rawInput: 'on', agent }).kind).toBe('success')
+    expect((await orgCommandHandler(org, org.deps, { rawInput: 'on', agent })).kind).toBe('success')
     expect(org.roleOf(agent.id)).toBe('secretary')
     expect(isEnvelopeApplied(agent)).toBe(true)
 
-    const off = orgCommandHandler(org, org.deps, { rawInput: 'off', agent })
+    const off = await orgCommandHandler(org, org.deps, { rawInput: 'off', agent })
     expect(off.kind).toBe('success')
     expect(isEnvelopeApplied(agent)).toBe(false)
     expect(org.roleOf(agent.id)).toBeUndefined()
@@ -114,9 +140,9 @@ describe('role envelope', () => {
     ])
 
     // A second off is a no-op, and on re-installs the whole envelope.
-    expect(orgCommandHandler(org, org.deps, { rawInput: 'off', agent }).kind).toBe('success')
+    expect((await orgCommandHandler(org, org.deps, { rawInput: 'off', agent })).kind).toBe('success')
     expect(registeredNames(agentCtx.registerSpy)).toEqual([...SECRETARY_TOOL_NAMES])
-    expect(orgCommandHandler(org, org.deps, { rawInput: 'on', agent }).kind).toBe('success')
+    expect((await orgCommandHandler(org, org.deps, { rawInput: 'on', agent })).kind).toBe('success')
     expect(registeredNames(agentCtx.registerSpy)).toEqual([...SECRETARY_TOOL_NAMES, ...SECRETARY_TOOL_NAMES])
     expect(agentCtx.restrictSpy).toHaveBeenCalledTimes(2)
     expect(org.roleOf(agent.id)).toBe('secretary')

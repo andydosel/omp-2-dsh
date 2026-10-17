@@ -131,6 +131,13 @@ export function OrgPanel({ useProjection, runCommand }: OrgPanelProps) {
             {model.rows.length === 0 && <li className={css.empty}>no managed session</li>}
           </ul>
         )}
+        {!collapsed && model.notices.length > 0 && (
+          <ul className={css.notices} aria-label="ORG notices" data-org-notices={model.notices.length}>
+            {model.notices.slice(-5).map(notice => (
+              <li key={notice.id} className={css.notice}>{notice.content}</li>
+            ))}
+          </ul>
+        )}
         {!collapsed && model.forbidden.length > 0 && (
           <p className={css.footer}>
             {`forbidden (${model.forbidden.length}): ${model.forbidden.join(', ')} · /org list shows all`}

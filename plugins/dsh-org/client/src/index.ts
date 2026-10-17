@@ -37,11 +37,15 @@ import type {} from '@deepseek-ai/dsh-session-projection/types'
 // Type-only: pulls the `org` SessionProjectionMap merge for useProjection.
 import type {} from '../../src/types.ts'
 import { OrgPanel } from './OrgPanel.tsx'
+import { OrgSessionRowMark, OrgSessionRowRelation } from './org-session-marks.tsx'
 
 export type { OrgPanelInjected, OrgPanelProps } from './OrgPanel.tsx'
 export { OrgPanel } from './OrgPanel.tsx'
 export type { OrgPanelModel } from './org-panel-model.ts'
-export { orgPanelModel } from './org-panel-model.ts'
+export { orgPanelModel, orgSessionMark } from './org-panel-model.ts'
+export type { OrgSessionMark } from './org-panel-model.ts'
+export type { OrgSessionRowProps } from './org-session-marks.tsx'
+export { OrgSessionRowMark, OrgSessionRowRelation } from './org-session-marks.tsx'
 
 /** Required services: the slot registry and the command Remote. */
 export const inject = ['slots', 'remote', 'remote.commands']
@@ -54,20 +58,22 @@ interface CommandAdmission {
 }
 
 /**
- * Execute one slash command for the owning session. The published
- * `commands/execute` Remote carries an `images` parameter the local host wire
- * does not expect (the runtime itself calls the same Remote with
- * `(sessionId, line)` only), so the call is narrowed to the 2-argument
- * admission shape.
+ * Execute one slash command for the owning session. 0.2.1's published
+ * `commands/execute` Remote requires `(agentId, line, submittedAttachments
+ * [, signal])`; the panel has no attachments, but the batch is still required
+ * (omitting it fails client-side arity validation).
  * @param ctx - the client plugin context (holds the Remote).
  * @param sessionId - the session whose agent runs the command.
  * @param command - the full slash line (e.g. `/org relinquish s-123`).
  * @returns null on admitted execution; a user-visible failure line otherwise.
  */
 async function executeCommand(ctx: Context, sessionId: SessionId, command: string): Promise<string | null> {
-  const execute = ctx.remote.commands.execute as unknown as
-    (agentId: SessionId, line: string) => Promise<CommandAdmission>
-  const result = await execute(sessionId, command)
+  const execute = ctx.remote.commands.execute as unknown as (
+    agentId: SessionId,
+    line: string,
+    submittedAttachments: readonly unknown[],
+  ) => Promise<CommandAdmission>
+  const result = await execute(sessionId, command, [])
   if (!result.ok) return `${result.error?.message ?? 'command failed'} (${result.error?.code ?? 'unknown'})`
   if (result.value === undefined) return `unknown command: ${command}`
   return null
@@ -90,4 +96,17 @@ export function apply(ctx: Context): void {
       runCommand: (command: string) => executeCommand(ctx, sessionId, command),
     }),
   }, OrgPanel))
+  // Global session list: mark who manages each session (or an orphaned lead).
+  // The 16px leading cell carries a dot; the hover card carries the full text.
+  // Both seats are declared by ui-workspace, so registration waits for them.
+  ctx.slots.inject('sidebar.session.row.leading', () => ctx.slots.register({
+    name: 'sidebar.session.row.leading',
+    id: 'org-relation',
+    order: 20,
+  }, OrgSessionRowMark))
+  ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
+    name: 'sidebar.session.row.hover',
+    id: 'org-relation',
+    order: 20,
+  }, OrgSessionRowRelation))
 }

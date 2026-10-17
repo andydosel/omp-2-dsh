@@ -153,6 +153,7 @@ dsh-rules(规则:提醒 + 门禁配置)
   - **安全阀 = 会话面板"解除+禁止"按钮**(事后覆盖,非事前每步拦截):一次做两件事—— `manager[target]` 清掉(该秘书不再接管)+ `forbidden[秘书].add(target)`(以后也碰不到)。
   - **严格模式扳手**(per 项目/会话可配):弱模型/高风险项目上,把"接管已存在会话"重新变为需你点一下;平时关(少打扰),需要时开。
   - **"禁止"只对该秘书生效**:目标会话从**该秘书面板**消失,但**左侧全局会话列表**仍在(你能看到、能访问)。**你自己永远能访问任何会话**。
+  - **解除/禁止必须对冷会话落地**:`relinquish`/`forbid` 不只写当前存活目标的日志——目标已冷(仅存在于持久存储)时,通过 `ctx.sessionPersistence` 的 write handle 直接向它的持久日志 append `org/relinquish`、`org/role`(清 lead)与 `org/forbidden`(目标侧禁止镜像)。这样 resume 后不会从旧 `org/claim` + `org/role lead` 重新显示已解除/已禁止的关系。fold 对 `org/claim` 做 forbidden 检查:**任何重放顺序下,已 forbid 的边都不会复活**;`assign_task` 也显式检查 forbid。
 ```mermaid
 flowchart TB
   S["秘书(协调者)"] -->|"manager:接管"| L["负责人(面板可见)"]
@@ -312,6 +313,7 @@ flowchart TB
 - **"写" ≠ "实施"**。负责人必须能写(方案/设计/汇报文档)——跨 agent 通信有字符上限,长方案须**落成文档让子 agent 读**,而非塞进命令。
 - **"实施" = 产出"这个任务的交付物",用 writeScope 表达**——负责人写 `docs/**`/`.md`/交接区(设计任务的交付物=文档 → 落在可写区 → 负责人完成它),写 `src/**` 被挡;worker 全写(代码任务的交付物=代码 → worker 完成)。**两种任务由"谁能写哪一类"统一覆盖,不必按任务重定规则。**
 - **worker 递归默认开**(fan-out-capable,受 `maxDepth`/`maxTotalAgents` 闸);叶子 worker 不给 spawn。
+- **worker 的工具面按 brief 的 `toolFilter` 裁剪**(见 §5.10 与 §13.5):给了 `toolFilter` 时只保留声明的工具子集(且只能收窄,不能越出 worker 工具词表);未给出时沿用 worker 的默认工具面。递归 worker 额外保留 `subtask_parallel`。工具过滤与角色信封同属机制强制,不靠提示词。
 - **交接区清理 = 秘书评判**:秘书拥有全局进展,任务完成时把过程文档**收敛成一句/合并一个文档**(进不进 git 由任务决定,出范围)。
 
 ---
@@ -348,6 +350,11 @@ flowchart TB
 |---|---|
 | `subtask_parallel` | 批量并发派 worker/评审子agent(递归,受 `maxDepth`/`maxTotalAgents`/`fanOut` 三闸) |
 | `report` | 向秘书/用户汇报(走 `peer_send`/`reportFrom`) |
+| `review_loop` | 启动一个评审循环(派干净评审工作子agent + 建 goal),立即返回 loop/carrier/goal id |
+
+**评审循环控制**:`review_filter` 由负责人与其 `review_loop` 派出的评审工作子agent(携带者)均可调用——过滤误报/已解决项,使其不再计入;`review_round`/`review_finish`/`review_complete`/`review_block`/`review_resume` 仅由携带者调用。
+
+**`project_structure` 的结构输出**:裁剪目录树(深度/条目上限,`node_modules`/`.git` 跳过)**+ 按文件聚合的符号索引**。符号索引只返回导出/声明**名字**(`export function/class/interface/type/const/let/var/enum`、`export default class/function`、`export { a, b as c }`),不返回任何代码正文;源码文件逐个读取一次、单文件/总数/文件数均有上限,超限标 `symbolsTruncated`。秘书没有全局 `read`/`grep`/`lsp`,这是它在不读代码正文的前提下了解公开 API 的入口。实现落在 `project_structure` 工具自身(不依赖 dsh 的符号服务;当前 dsh 0.2.1-rc.2 未提供可注入的 symbol/LSP 服务),目录树与符号索引都在同一 `ctx.fs` seam 上完成。
 
 **负责人读/写**:`restrict` 保留全局 `read`/`glob`/`grep`/`lsp`(读)/`read_image`;**写经路径闸**——只 `docs/**`/`.md`/`.dsh-plans/**`,挡 `src/**`(同 `--review` 机制)。
 
@@ -383,6 +390,7 @@ flowchart TB
   name: '@dsh-plugin/dsh-peers'
   config:
     allowAncestor: true
+    ancestorWalkLimit: 64            # 血统鉴权最多向上追多少代
 
 - id: orchestrator
   name: '@dsh-plugin/dsh-orchestrator'
@@ -395,11 +403,21 @@ flowchart TB
       maxTotalAgents: 20
       minSubtasks: 2
       minEffortTokens: 2000
+    workerSpawn:                     # worker 派发基座(provider/tiers/maxConsecutiveWakes)
+      provider: spawn
+      tiers:
+        fast: {}
+        good: {}
+      maxConsecutiveWakes: 3
+    workerTimeoutMs: 1800000          # 单个 worker 的 turn 等待上限(30 分钟)
+    reviewTimeoutMs: 600000           # 单个评审者的等待上限(10 分钟)
+    maxGoalRounds: 32                 # 一个评审循环 goal 的轮数上限
 
 - id: rules
   name: '@dsh-plugin/dsh-rules'
   config:
     advisoryFiles: ['$DSH_HOME/AGENTS.md', 'persona']
+    advisoryMaxBytes: 16384          # 单个提醒型规则文件的读取上限
     gateRules: [...]                 # 转成写路径/审批门禁
 ```
 
@@ -483,19 +501,21 @@ flowchart TB
 - **v1.2**(2026-09-05):设计定稿。①任务粒度=需求/委托级 + 与 todo 区分 + 保守闭环+重开;②评审循环 = 定制化 goal,**由评审工作子agent 承载**(不落秘书/负责人)+ 双跳出(零P0 / 人工决策);③递归 fan-out `subtask_parallel` + 三个可配闸(maxDepth/maxTotalAgents/fanOut,配置在 cordis.yml);④`--review` 按**写作用域**分(不用工具名分类);⑤**模型路由延后**(就是 vibe `fast/good` 两档扩展,不立项)。
 - **v1.3**(2026-09-05):**三方评审(适配性/可行性/正确性/重复)后修订**。①负责人创建原语改为 `ctx.agents.create()`/`resume()`(原 `ctx.sessions.create`/`fork` 错误——只建裸日志 / 引入父血统);②`--review` 写作用域改为**自建 `tools/pre-execute` 路径闸**(dsh 无路径级 fence,sandbox 仅 mode 级);③人工决策链补**父会话转接**(子agent 抛 `DELEGATED_CALLER`);④peers 去重改为**自建幂等键**(subagent seam 无消息级幂等);⑤明确**不依赖 `ctx.agentTeams`**(仅借模式);⑥task-board 标明独立功能;⑦新增 §7.4 悬而未决 6 条。
 - **v1.4**(2026-09-05):角色工具集定稿。①新增 §5.9:角色=能力信封(工具集强制,非提示词)——秘书读文档+结构/写长任务书、负责人读码+写文档不写码、worker 全写+递归默认开;②"写≠实施","实施"用 writeScope 表达(文档 vs 代码);③交接区清理由秘书评判,进 git 由任务定(出范围);④severity 不统一(advisor=方向建议/可选,P0-P3=问题分级/必解);⑤vibe-mode 实现时弃用;⑥严格模式默认 off。
-- **v1.5**(2026-10-07):0.2.0-rc.2 迁移对齐。新增 §12:9 处 API 修正(`subagents.spawn`→`startContinuable`、`userQuestions.registerProvider` 删、`goals` 硬依赖 `sessionProjections`、projection `init(header,inheritedEventCount)`、`followup`→`sendMessage`、`Session.events`→projection、消息自有 kind、`tool-result`→`role:'tool'`、客户端拆包);§5.7 父转接改 `sendMessage`。其余核心机制签名未变。
+- **v1.5**(2026-10-07):0.2.0-rc.2 迁移对齐(后由 v1.8 升级目标到 0.2.1-rc.2 / `startActivation`)。新增 §12:9 处 API 修正(`subagents.spawn`→`startContinuable`、`userQuestions.registerProvider` 删、`goals` 硬依赖 `sessionProjections`、projection `init(header,inheritedEventCount)`、`followup`→`sendMessage`、`Session.events`→projection、消息自有 kind、`tool-result`→`role:'tool'`、客户端拆包);§5.7 父转接改 `sendMessage`。其余核心机制签名未变。
 - **v1.6**(2026-10-07):新增 §5.10 角色工具清单——具体工具名 + 语义 + 归属。秘书专属 9 个(`org_claim/relinquish/forbid/spawn_lead`、`assign_task`、`read_project_docs`、`project_structure`、`summarize_reports`、`notify_user`);共享 3 组(`peer_send`、`task_*`、`ask_question`);负责人专属 2 个(`subtask_parallel`、`report`);worker 按 `toolFilter` 全读写 + 递归时 `subtask_parallel`。
 - **v1.7**(2026-10-07):新增 §13 模块详细实现规格——每插件 TS 接口 + 工具 schema 级(review-gate 的 protectedPaths 闸、question-board 的 QuestionSnapshot/ask_question、task-board 的 TaskSnapshot/task_*、orchestrator 的 subtask_parallel、org+peers 的 OrgState/PeerMessageSnapshot/org_*/peer_send + /org 命令)。
+- **v1.8**(2026-10-17):目标版本对齐 **0.2.1-rc.2**,`startContinuable`→`startActivation`(§12/§13.5)。补齐实现规格:§5.10 `project_structure` 的按文件符号索引;§5.1/§13.6 冷目标 relinquish/forbid 持久化 + 目标侧 `org/forbidden` 镜像 + fold 不复活 forbidden 边;§13.6 全局会话列表 managed/orphan 标记。
+- **v1.9**(2026-10-17):**移除 0.2.0-rc.2 兼容声明**,所有 `@deepseek-ai/dsh-*` peer/engines 收敛为 `^0.2.1-rc.2`。原因:实现无条件调用 0.2.1 引入的 `ctx.subagents.startActivation`,在 0.2.0 主机会运行期失败。
 
 ---
 
-## 12. 0.2.0-rc.2 API 对齐(迁移备注,实施时照此写)
+## 12. 0.2.1-rc.2 API 对齐(迁移备注,实施时照此写)
 
-本设计基于本地 dsh **0.1.1-rc.2** 撰写;实施时目标迁移到 **0.2.0-rc.2**。以下 API 引用需按新语义写(已由 `RESEARCH-LATEST-UPSTREAM-COMPAT.md` + `VERIFY-4-APIS-0.2.0-rc.2.md` 核实):
+本设计基于本地 dsh **0.1.1-rc.2** 撰写;实施时目标迁移到 **0.2.1-rc.2**(依赖声明为 `^0.2.1-rc.2`;不再支持 0.2.0-rc.2——实现无条件使用 0.2.1 的 `startActivation`)。以下 API 引用需按新语义写(已由 `RESEARCH-LATEST-UPSTREAM-COMPAT.md` + `VERIFY-4-APIS-0.2.0-rc.2.md` 核实):
 
-| # | 设计引用 | 0.2.0-rc.2 实况 | 修正 |
+| # | 设计引用 | 0.2.1-rc.2 实况 | 修正 |
 |---|---|---|---|
-| 1 | `ctx.subagents.spawn(...)` | **从来不是方法**(仅 provider 注册名) | 可续传用 `startContinuable(spec)`;一次性走 `tool-subagent`(spawn-in-process provider) |
+| 1 | `ctx.subagents.spawn(...)` | **从来不是方法**(仅 provider 注册名) | 可续传用 `startActivation(SubagentActivationSpec)`(0.2.1 取代 `startContinuable`,`label`/`signal` 移入 `SubagentActivationSpec`);一次性走 `tool-subagent`(spawn-in-process provider) |
 | 2 | `ctx.userQuestions.registerProvider()` | **删除** | 改 `user-questions/request` waterfall + `answer()`;`ask()` 保留 |
 | 3 | `ctx.goals`(评审循环) | 签名未变,现**硬依赖 `sessionProjections`** | orchestrator 组合显式挂 `sessionProjections`;stateVersion 4→6(旧行作废) |
 | 4 | session-projection `init()` | → `init(header, inheritedEventCount)` | 补参,正确支持 fork |
@@ -511,7 +531,7 @@ flowchart TB
 
 ## 13. 模块详细实现规格(接口 / 事件 / 工具 / 配置)
 
-> 每个插件给到 TS 接口 + 工具 schema 级。0.2.0-rc.2 对齐见 §12。
+> 每个插件给到 TS 接口 + 工具 schema 级。0.2.1-rc.2 对齐见 §12。
 
 ### 13.1 `dsh-review-gate`
 
@@ -544,7 +564,7 @@ interface QuestionSnapshot {
   { name:'ask_question', input: { content: string; options?: QuestionOption[]; blocking?: boolean },
     output: { id: string } }
   ```
-- **服务**:`ctx.questionBoard.ask/answer/dismiss/list`。
+- **服务**:`ctx.questionBoard.runtime.ask/answer/dismiss/list`(service 只做装配,不再转发)。
 - **投影**:`questionBoard`(`key`;`stateSchema: QuestionSnapshot[]`;`init(header, count)`;`apply` 于 `question/*`)。
 - **投递**:blocking 答后 `agent.followup`/`steer` 唤醒;子 agent 经父转接(§5.7)。
 
@@ -582,15 +602,31 @@ interface OrchestratorConfig {
   reviewerTools: string[]             // ['read','grep','glob']
   zeroP0Approach: 'count'             // 数字判定
   fanOut: { maxDepth: number; maxTotalAgents: number; minSubtasks: number; minEffortTokens: number }
+  workerSpawn: {                      // worker 派发基座(dsh-worker-spawn 的 config 块)
+    provider: string                  // 默认 'spawn'
+    tiers: { fast?: TierRoute; good?: TierRoute }
+    maxConsecutiveWakes: number       // 默认 3
+  }
+  workerTimeoutMs: number             // 默认 1_800_000(单个 worker turn 等待)
+  reviewTimeoutMs: number             // 默认 600_000(单个评审者等待)
+  maxGoalRounds: number               // 默认 32(评审循环 goal 轮数上限)
 }
 ```
+- **评审工具(7 个 `review_*`,注册在根上下文,按携带者作用域鉴权)**:
+  - `review_loop({objective, plan?, files?})` — 负责人启动一个评审循环:派评审工作子agent、建 goal,立即返回 loop/carrier/goal id。
+  - `review_round({plan, files?, focus?, reviewers?})` — 跑一轮全新干净评审者,返回跨轮累积的已接受 findings 计数。
+  - `review_filter({reject:[{severity, summary, reason?}], note?, loopId?})` — 负责人过滤误报/已解决项,使其不再计入。
+  - `review_finish()` — 数字闸:仍有 P0、上轮未认证或尚无评审者时拒绝闭合评审阶段。
+  - `review_complete({summary?})` — 出口 A:评审阶段零 P0 且实施/验证完成后关闭 goal 并回报。
+  - `review_block({code, message})` — 出口 B:真业务判断/不可逆点停循环等人工决策。
+  - `review_resume()` — 人工答案经父转接后继续循环。
 - **工具** `subtask_parallel`:
   ```ts
   { name:'subtask_parallel',
     input: { tasks: { brief: string; model?: 'fast'|'good' }[]; maxDepth?: number; maxTotalAgents?: number },
     output: { results: { taskIndex: number; value: unknown }[] } }
   ```
-  内部:`startContinuable`(可续传,持 goal 的评审工作子agent)+ spawn-in-process provider(一次性 worker)。
+  内部:`startActivation`(可续传,持 goal 的评审工作子agent)+ spawn-in-process provider(一次性 worker)。
 - **评审循环**:`ctx.goals.create({objective})` → 每轮 `subtask_parallel` 派干净评审者 → 收集 findings → 负责人过滤 → `task.update` 累积 → `count P0 === 0` 则 `complete`;人工决策点 `goal.block(reason)` → 等待 → `goal.resume`。
 - **评审者构造**:复用 3.3 抽取的 `composeReviewer(agentCtx, agent, spec, watchdog)`。
 
@@ -607,14 +643,14 @@ interface PeerMessageSnapshot {
   delivery: 'quiet' | 'wakeup'; content: ContentBlock[]
 }
 ```
-- **事件**:`org/claim`、`org/relinquish`、`org/forbid`、`org/role`;`peer/message`(幂等键 = `senderId+messageId`,自建去重)。
+- **事件**:`org/claim`、`org/relinquish`、`org/forbid`、`org/forbidden`(目标侧禁止镜像,冷/热目标都落盘)、`org/role`;`peer/message`(幂等键 = `senderId+messageId`,自建去重)。
 - **工具(秘书专属)**:`org_claim({sessionId})`、`org_relinquish({sessionId})`、`org_forbid({sessionId})`、`org_spawn_lead({name,cwd,prompt})`、`assign_task({leadId,subject,brief})`、`read_project_docs({path})`(仅 .md/docs)、`project_structure({path?})`、`summarize_reports({reportIds[]})`、`notify_user({content})`。
 - **工具(共享)**:`peer_send({targetId, content, delivery?})`、`task_*`、`ask_question`。
-- **工具(负责人专属)**:`subtask_parallel`、`report({content})`。
+- **工具(负责人专属)**:`subtask_parallel`、`report({content})`、`review_loop`、`review_filter`(评审循环控制,见 §13.5;`review_filter` 与携带者同权)。
 - **服务**:`ctx.org`(`manager/forbidden/roles` + claim/relinquish/forbid/spawnLead/assign);`ctx.peers`(send/listMessages/去重)。
 - **命令**:`/org on|off|claim <id>|relinquish <id>|forbid <id>|list`。
 - **投影**:`org`(按秘书看的 manager 列表 + forbidden)、`peers`(收件箱)。
-- **UI**:会话面板(点秘书 → 列接管会话,每行"解除+禁止");左侧全局会话列表标"谁归谁管/孤儿"。
+- **UI**:会话面板(点秘书 → 列接管会话,每行"解除+禁止");左侧全局会话列表标"谁归谁管/孤儿"——注册 `sidebar.session.row.leading`(16px 状态点)与 `sidebar.session.row.hover`(关系文案),从全局 `useSessions` 快照读各会话 `org` projection(`projectionsBySession`,回退列表缓存),`managedBy` → "归 X 管",`role==='lead'` 且无 manager → "孤儿",独立会话不标。
 
 ---
 

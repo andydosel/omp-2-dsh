@@ -8,25 +8,13 @@
  * and deliberately matches configured globs against both the absolute and the
  * session-cwd-relative spelling of the call's path argument, because dsh also
  * resolves relative paths against the session workspace.
- *
- * Cross-plugin contract: consumers (review-gate, org) read `ctx.rules` and call
- * {@link RulesGate.match} / {@link RulesGate.evaluate} instead of re-deriving
- * the same rules.
  * @module @dsh-plugin/dsh-rules/gate
  */
 
 import { isAbsolute, relative, resolve } from 'node:path'
-import { Service } from '@deepseek-ai/cordis'
-import type { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { GateRule } from './config.ts'
 import { firstPathMatch, normalizePath } from './glob.ts'
-
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    rules: RulesGate
-  }
-}
 
 /**
  * The path argument of every tool whose calls a path-scoped rule can evaluate.
@@ -121,15 +109,14 @@ export function matchGateRule(rule: GateRule, exec: Readonly<ToolExecution>): Ga
 }
 
 /**
- * `ctx.rules`: the mounted gate rules, as a decision source for both this
- * plugin's `tools/pre-execute` listener and any other coordinator plugin.
+ * The mounted gate rules, as this plugin's `tools/pre-execute` decision source.
  */
-export class RulesGate extends Service {
+export class RulesGate {
   /** The normalized rules this gate evaluates, in configuration order. */
   readonly gateRules: readonly GateRule[]
 
-  constructor(ctx: Context, gateRules: readonly GateRule[]) {
-    super(ctx, 'rules')
+  /** @param gateRules - the normalized rules, in configuration order. */
+  constructor(gateRules: readonly GateRule[]) {
     this.gateRules = gateRules
   }
 

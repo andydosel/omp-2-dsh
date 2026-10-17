@@ -8,6 +8,7 @@
  * @module @dsh-plugin/dsh-question-board/tool
  */
 
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { AskQuestionRequest } from './types.ts'
@@ -19,6 +20,8 @@ export const ASK_QUESTION_TOOL = 'ask_question'
 export interface AskQuestionValue {
   /** The registered question's session-local id. */
   id: string
+  /** The human's answer, present only after a truly blocking ask returned. */
+  answer?: string
 }
 
 /** The service slice the tool writes through. */
@@ -30,6 +33,23 @@ export interface AskQuestionDeps {
    * @returns the new question's id.
    */
   ask(session: Session, request: AskQuestionRequest): string
+  /**
+   * Pause the calling turn until the human answers (blocking asks only):
+   * `ctx.userQuestions` when composed, else `ctx.approval`.
+   * @param session - the asking session (the durable inbox already has `id`).
+   * @param id - the registered question id.
+   * @param request - the same request the inbox recorded.
+   * @param agent - the calling agent (human interaction needs the live root).
+   * @param signal - caller cancellation.
+   * @returns the answer text.
+   */
+  askBlocking?(
+    session: Session,
+    id: string,
+    request: AskQuestionRequest,
+    agent: Agent | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<string>
 }
 
 /**
@@ -40,11 +60,12 @@ export interface AskQuestionDeps {
 export function defineAskQuestionTool(deps: AskQuestionDeps): ToolDefinition {
   return defineTool({
     name: ASK_QUESTION_TOOL,
-    description: 'Ask the human a question asynchronously and keep working. '
-      + 'The question is registered in the question inbox and this returns immediately with its id; '
+    description: 'Ask the human a question through the question inbox. '
+      + 'By default this registers the question and returns immediately with its id; '
       + 'do NOT inline a long question into your reply — the human answers from the inbox, out of band. '
-      + 'Set blocking=true only when you cannot proceed without the answer (you pause and are woken when answered); '
-      + 'leave it false (default) to keep going and receive the answer alongside your next steps.',
+      + 'Set blocking=true only when you cannot proceed without the answer: the question is still registered, and this '
+      + 'call then PAUSES through ctx.userQuestions (or ctx.approval when user questions are unavailable) until the '
+      + 'human answers, returning the answer with the id.',
     parameters: {
       content: {
         type: 'string',
@@ -74,11 +95,14 @@ export function defineAskQuestionTool(deps: AskQuestionDeps): ToolDefinition {
         additionalProperties: false,
         properties: {
           id: { type: 'string', required: true, description: 'The registered question id.' },
+          answer: { type: 'string', description: 'The human answer, present after a blocking ask returned.' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: `Question ${value.id} registered in the question inbox.`,
+        text: value.answer === undefined
+          ? `Question ${value.id} registered in the question inbox.`
+          : `Question ${value.id} answered: ${value.answer}`,
       }],
     },
     execute: async (args, exec): Promise<AskQuestionValue> => {
@@ -86,13 +110,20 @@ export function defineAskQuestionTool(deps: AskQuestionDeps): ToolDefinition {
       if (session === undefined) {
         throw new Error('ask_question: no calling agent session to register the question on')
       }
-      return {
-        id: deps.ask(session, {
-          content: [{ type: 'text', text: args.content }],
-          ...args.options === undefined ? {} : { options: args.options },
-          ...args.blocking === undefined ? {} : { blocking: args.blocking },
-        }),
+      const request = {
+        content: [{ type: 'text' as const, text: args.content }],
+        ...args.options === undefined ? {} : { options: args.options },
+        ...args.blocking === undefined ? {} : { blocking: args.blocking },
       }
+      const id = deps.ask(session, request)
+      if (request.blocking !== true) return { id }
+      // A blocking ask must actually pause the turn. `ask` above recorded the
+      // durable inbox row; the provider wait below is the synchronous branch
+      // design §5.4 requires (userQuestions, with approval as the fallback).
+      if (deps.askBlocking === undefined) {
+        throw new Error('ask_question: blocking=true needs ctx.userQuestions or ctx.approval, which are not composed')
+      }
+      return { id, answer: await deps.askBlocking(session, id, request, exec.agent, exec.signal) }
     },
   })
 }

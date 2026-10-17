@@ -30,9 +30,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { childSessionEvents, startWorker, WorkerRegistry } from '@dsh-plugin/dsh-worker-spawn'
+import { childSessionEvents, startWorker, WORKER_INHERITED_TOOLS, WorkerRegistry } from '@dsh-plugin/dsh-worker-spawn'
 import type { ResolvedWorkerSpawnConfig } from '@dsh-plugin/dsh-worker-spawn/types'
 import { composeReviewer } from '@dsh-plugin/dsh-advisor/reviewer'
+import { describeError } from '@dsh-plugin/dsh-util/error'
 // Type-only: resolves `agentCtx.systemPrompt` for the reviewer's role section.
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { renderReviewerRole } from './briefs.ts'
@@ -47,6 +48,8 @@ export interface SubTaskRequest {
   readonly brief: string
   /** Child label: the worker's creation label, or the reviewer's session/name suffix. */
   readonly label: string
+  /** Optional per-brief worker tool filter (already normalized by the fan-out gates). */
+  readonly toolFilter?: readonly string[]
 }
 
 /** How one dispatched sub-task settled, and what it produced. */
@@ -97,8 +100,8 @@ class CarrierDispatcher implements SubTaskDispatcher {
     private readonly options: DispatcherOptions,
   ) {
     // The roster sink is intentionally inert: this plugin has no worker dock;
-    // its observable surface is `ctx.orchestrator.status()` and the loop's
-    // tools. The registry is used for its turn-precise wait semantics.
+    // its observable surface is the runtime status and the loop's tools. The
+    // registry is used for its turn-precise wait semantics.
     this.registry = new WorkerRegistry(
       ctx,
       carrier,
@@ -124,7 +127,7 @@ class CarrierDispatcher implements SubTaskDispatcher {
         ...result.output === undefined ? {} : { output: result.output },
       }
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = describeError(error)
       return signal.aborted
         ? { status: 'aborted', error: message }
         : { status: 'error', error: message }
@@ -140,11 +143,17 @@ class CarrierDispatcher implements SubTaskDispatcher {
   /** Spawn a durable continuable worker and read its first turn. */
   private async dispatchWorker(request: SubTaskRequest, signal: AbortSignal): Promise<SubTaskOutcome> {
     try {
+      // A brief may only NARROW the worker toolset: coordination tools and
+      // anything else outside the worker vocabulary can never be granted here.
+      const toolFilter = request.toolFilter === undefined
+        ? undefined
+        : request.toolFilter.filter(name => WORKER_INHERITED_TOOLS.includes(name))
       const started = await startWorker(this.ctx, {
         parent: this.carrier,
         tier: request.tier,
         prompt: request.brief,
         label: request.label,
+        ...toolFilter === undefined ? {} : { toolFilter },
         tiers: this.options.workerSpawn.tiers,
         provider: this.options.workerSpawn.provider,
         signal,
@@ -158,7 +167,7 @@ class CarrierDispatcher implements SubTaskDispatcher {
       const settled = await this.awaitTurn(started.childId, record.lastTurn, this.options.workerTimeoutMs, signal)
       return { role: 'worker', ...settled }
     } catch (error: unknown) {
-      return { role: 'worker', status: signal.aborted ? 'aborted' : 'error', error: describe(error) }
+      return { role: 'worker', status: signal.aborted ? 'aborted' : 'error', error: describeError(error) }
     }
   }
 
@@ -199,7 +208,7 @@ class CarrierDispatcher implements SubTaskDispatcher {
         try {
           reviewer.cancel({ kind: 'user' }, { keepInbox: true })
         } catch (error: unknown) {
-          this.options.warn('dsh-orchestrator: could not cancel reviewer %s: %s', reviewer.id, describe(error))
+          this.options.warn('dsh-orchestrator: could not cancel reviewer %s: %s', reviewer.id, describeError(error))
         }
         return { role: 'reviewer', ...settled }
       }
@@ -217,13 +226,13 @@ class CarrierDispatcher implements SubTaskDispatcher {
           : { findings },
       }
     } catch (error: unknown) {
-      return { role: 'reviewer', status: signal.aborted ? 'aborted' : 'error', error: describe(error) }
+      return { role: 'reviewer', status: signal.aborted ? 'aborted' : 'error', error: describeError(error) }
     } finally {
       if (handle !== undefined) {
         try {
           await handle.dispose()
         } catch (error: unknown) {
-          this.options.warn('dsh-orchestrator: reviewer %s dispose failed: %s', sessionId, describe(error))
+          this.options.warn('dsh-orchestrator: reviewer %s dispose failed: %s', sessionId, describeError(error))
         }
       }
     }
@@ -232,11 +241,6 @@ class CarrierDispatcher implements SubTaskDispatcher {
   dispose(): void {
     this.registry.dispose()
   }
-}
-
-/** Render one thrown value for a tool result or a log line. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /**

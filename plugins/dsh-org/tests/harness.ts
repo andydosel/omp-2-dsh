@@ -99,6 +99,10 @@ export class FakeCtx {
   readonly sessionsById = new Map<string, Session>()
   readonly agentsById = new Map<string, Agent>()
   readonly created: CreatedLead[] = []
+  /** Persisted, not-yet-live sessions the fake `agents.resume()` can load. */
+  readonly coldSessions = new Map<string, Session>()
+  /** Every `agents.resume()` call, in order. */
+  readonly resumed: string[] = []
   readonly provides = new Map<string, unknown>()
   readonly logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
   readonly reflect = { provide: vi.fn() }
@@ -128,6 +132,13 @@ export class FakeCtx {
       })
     }
     this.sessionsById.set(String(session.id), session)
+  }
+
+  /** Register a persisted (cold) session the fake resume path can load. */
+  addColdSession(id: string): Session {
+    const session = Session.create(SessionId(id))
+    this.coldSessions.set(id, session)
+    return session
   }
 
   /** Build and register a real session plus a fake agent; `toolNames` also binds a fake agent scope. */
@@ -164,6 +175,10 @@ export class FakeCtx {
       meta?: { cwd?: string }
       setup?: (agentCtx: FakeAgentCtx, agent: Agent) => unknown
     }) => Promise<{ agent: Agent; dispose: () => Promise<void> }>
+    resume: (options: {
+      resumeSessionId: SessionId
+      setup?: (agentCtx: FakeAgentCtx, agent: Agent) => unknown
+    }) => Promise<{ agent: Agent; dispose: () => Promise<void> }>
   } {
     return {
       list: () => [...this.agentsById.values()],
@@ -177,6 +192,21 @@ export class FakeCtx {
         this.agentsById.set(String(options.sessionId), agent)
         const dispose = vi.fn(async () => {})
         this.created.push({ sessionId: String(options.sessionId), agent, agentCtx, dispose })
+        return { agent, dispose }
+      },
+      resume: async (options) => {
+        const id = String(options.resumeSessionId)
+        this.resumed.push(id)
+        const session = this.coldSessions.get(id)
+        if (session === undefined) throw new Error(`fake agents.resume: no persisted session ${id}`)
+        this.coldSessions.delete(id)
+        this.connectSession(session)
+        const agent = makeAgent(id, session)
+        const agentCtx = new FakeAgentCtx(this.leadToolNames)
+        options.setup?.(agentCtx, agent)
+        this.agentsById.set(id, agent)
+        const dispose = vi.fn(async () => {})
+        this.created.push({ sessionId: id, agent, agentCtx, dispose })
         return { agent, dispose }
       },
     }

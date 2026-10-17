@@ -19,6 +19,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { describeError } from '@dsh-plugin/dsh-util/error'
 import type { TaskBoardHost } from './service.ts'
 
 /** The slice of a command invocation the `/task` handler needs. */
@@ -65,7 +66,7 @@ export function taskCommandHandler(board: TaskBoardHost, invocation: TaskCommand
         else if (verb === 'reopen') board.reopen(session, argument)
         else board.update(session, argument, { inContext: verb === 'focus' })
       } catch (error) {
-        return { kind: 'error', text: `task ${verb}: ${error instanceof Error ? error.message : String(error)}` }
+        return { kind: 'error', text: `task ${verb}: ${describeError(error)}` }
       }
       const done = verb === 'close'
         ? 'closed'

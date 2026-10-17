@@ -10,6 +10,7 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { PEER_SEND_TOOL } from '../src/tool.ts'
 import { PeersService, PeerSendError, resolvePeersConfig } from '../src/service.ts'
+import type { OrgForbiddenProbe } from '../src/types.ts'
 import { FakeContext, makeFakeAgent, type FakeAgent } from './fake-context.ts'
 
 interface Setup {
@@ -21,10 +22,28 @@ interface Setup {
 }
 
 /** A fake context with a sender and a target session/agent, and a live service. */
-function setup(options: { wakeupEnabled?: boolean; maxContentBytes?: number; forbidden?: boolean } = {}): Setup {
+function setup(options: {
+  wakeupEnabled?: boolean
+  maxContentBytes?: number
+  forbidden?: boolean
+  related?: boolean
+  probe?: OrgForbiddenProbe
+} = {}): Setup {
   const ctx = new FakeContext()
   const senderSession = Session.create(SessionId('sender'))
-  const targetSession = Session.create(SessionId('sess-a'))
+  const base = Session.create(SessionId('sess-a'))
+  // Authorization (§5.6): the default fixture is a durable child of the
+  // sender, so the lineage edge admits the send. `related: false` gives two
+  // independent sessions for the denial tests.
+  const targetSession = options.related === false
+    ? base
+    : Session.create(SessionId('sess-a'), [], {
+      ...base.header,
+      parentSession: senderSession.id,
+      isSeeded: false,
+      origin: 'subagent',
+      delegationDepth: 1,
+    })
   ctx.sessionMap.set('sender', senderSession)
   ctx.sessionMap.set('sess-a', targetSession)
   const sender = makeFakeAgent('sender', senderSession)
@@ -32,6 +51,7 @@ function setup(options: { wakeupEnabled?: boolean; maxContentBytes?: number; for
   ctx.agentMap.set('sender', sender)
   ctx.agentMap.set('sess-a', target)
   if (options.forbidden === true) ctx.orgProbe = { isForbidden: () => true }
+  if (options.probe !== undefined) ctx.orgProbe = options.probe
   const config = {
     ...options.wakeupEnabled === undefined ? {} : { wakeupEnabled: options.wakeupEnabled },
     ...options.maxContentBytes === undefined ? {} : { maxContentBytes: options.maxContentBytes },
@@ -97,6 +117,20 @@ describe('PeersService.send dedup', () => {
   })
 })
 
+describe('PeersService proxy compatibility', () => {
+  it('delivers through a Proxy (the shape ctx.get("peers") returns)', async () => {
+    const { service, sender, targetSession } = setup()
+    // Cordis wraps a provided service in a Proxy on `ctx.get`. A `#private`
+    // field read inside a method called on that Proxy throws, which is exactly
+    // how `dsh-org`'s assign_task delivery used to fail.
+    const proxied = new Proxy(service, {})
+    const result = await proxied.send(sender, { targetId: 'sess-a', content: 'through the proxy', messageId: 'proxy1' })
+    expect(result.status).toBe('delivered')
+    expect(peerEvents(targetSession)).toBe(1)
+    expect(proxied.listMessages('sess-a')).toHaveLength(1)
+  })
+})
+
 describe('PeersService.send delivery', () => {
   it('quiet never calls followup; wakeup calls it exactly once with a dsh-peers notice', async () => {
     const { service, sender, target } = setup()
@@ -128,6 +162,48 @@ describe('PeersService.send authorization and validation', () => {
       .rejects.toThrow(/forbidden/)
     expect(peerEvents(targetSession)).toBe(0)
     expect(service.inboxSize('sess-a')).toBe(0)
+  })
+
+  it('refuses an unrelated session without a manager or coordinator edge', async () => {
+    const { service, sender, targetSession } = setup({ related: false })
+    await expect(service.send(sender, { targetId: 'sess-a', content: 'x', messageId: 'u1' }))
+      .rejects.toThrow(/not authorized/)
+    expect(peerEvents(targetSession)).toBe(0)
+  })
+
+  it('admits a manager edge, a managed edge, and a coordinator sender', async () => {
+    const managed = setup({ related: false, probe: { managerOf: id => (String(id) === 'sender' ? SessionId('sess-a') : undefined) } })
+    await expect(managed.service.send(managed.sender, { targetId: 'sess-a', content: 'brief', messageId: 'm1' }))
+      .resolves.toMatchObject({ status: 'delivered' })
+
+    const manager = setup({ related: false, probe: { managerOf: id => (String(id) === 'sess-a' ? SessionId('sender') : undefined) } })
+    await expect(manager.service.send(manager.sender, { targetId: 'sess-a', content: 'report', messageId: 'm2' }))
+      .resolves.toMatchObject({ status: 'delivered' })
+
+    const coordinator = setup({ related: false, probe: { roleOf: id => (String(id) === 'sender' ? 'secretary' : undefined) } })
+    await expect(coordinator.service.send(coordinator.sender, { targetId: 'sess-a', content: 'route', messageId: 'm3' }))
+      .resolves.toMatchObject({ status: 'delivered' })
+  })
+
+  it('honours allowAncestor:false', async () => {
+    const ctx = new FakeContext()
+    const senderSession = Session.create(SessionId('sender'))
+    const base = Session.create(SessionId('sess-a'))
+    const targetSession = Session.create(SessionId('sess-a'), [], {
+      ...base.header,
+      parentSession: senderSession.id,
+      isSeeded: false,
+      origin: 'subagent',
+      delegationDepth: 1,
+    })
+    ctx.sessionMap.set('sender', senderSession)
+    ctx.sessionMap.set('sess-a', targetSession)
+    const sender = makeFakeAgent('sender', senderSession)
+    ctx.agentMap.set('sender', sender)
+    ctx.agentMap.set('sess-a', makeFakeAgent('sess-a', targetSession))
+    const service = new PeersService(ctx as unknown as Context, { allowAncestor: false })
+    await expect(service.send(sender, { targetId: 'sess-a', content: 'x', messageId: 'a1' }))
+      .rejects.toThrow(/not authorized/)
   })
 
   it('rejects an unknown target, a self-send, an empty body, and an oversized body', async () => {
@@ -180,7 +256,12 @@ describe('peer_send tool', () => {
 
 describe('resolvePeersConfig', () => {
   it('applies defaults and fails loud on an unknown key', () => {
-    expect(resolvePeersConfig({})).toEqual({ wakeupEnabled: true, maxContentBytes: 16384 })
+    expect(resolvePeersConfig({})).toEqual({
+      wakeupEnabled: true,
+      maxContentBytes: 16384,
+      allowAncestor: true,
+      ancestorWalkLimit: 64,
+    })
     expect(() => resolvePeersConfig({ nope: true } as unknown as Parameters<typeof resolvePeersConfig>[0]))
       .toThrow(/unknown config key/)
   })

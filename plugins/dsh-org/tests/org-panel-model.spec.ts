@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { orgPanelModel } from '../client/src/org-panel-model.ts'
+import { orgPanelModel, orgSessionMark } from '../client/src/org-panel-model.ts'
 import { emptyOrgView } from '../src/projection.ts'
 import type { OrgProjectionView } from '../src/types.ts'
 
@@ -31,6 +31,7 @@ describe('orgPanelModel', () => {
       rows: ['s-a', 's-b', 's-c'],
       hidden: [],
       forbidden: [],
+      notices: [],
     })
   })
 
@@ -41,6 +42,7 @@ describe('orgPanelModel', () => {
       rows: ['s-a'],
       hidden: ['s-b'],
       forbidden: ['s-b'],
+      notices: [],
     })
   })
 
@@ -48,6 +50,41 @@ describe('orgPanelModel', () => {
     // `forbid` releases the edge in the same host operation, so this is the
     // state a "release + forbid" click lands in: no rows, one forbidden id.
     const model = orgPanelModel(secretaryView([], ['s-gone']))
-    expect(model).toEqual({ role: 'secretary', rows: [], hidden: [], forbidden: ['s-gone'] })
+    expect(model).toEqual({ role: 'secretary', rows: [], hidden: [], forbidden: ['s-gone'], notices: [] })
+  })
+
+  it('surfaces notify_user notices, including after the role is cleared', () => {
+    const notice = { id: 'n-3', content: 'The nightly build is green.', time: 1 }
+    expect(orgPanelModel({ ...secretaryView([]), notices: [notice] })).toEqual({
+      role: 'secretary',
+      rows: [],
+      hidden: [],
+      forbidden: [],
+      notices: [notice],
+    })
+    expect(orgPanelModel({ ...emptyOrgView(), notices: [notice] })).toEqual({
+      role: null,
+      rows: [],
+      hidden: [],
+      forbidden: [],
+      notices: [notice],
+    })
+  })
+})
+
+describe('orgSessionMark', () => {
+  it('labels a managed session with its secretary', () => {
+    expect(orgSessionMark({ ...emptyOrgView(), role: 'lead', managedBy: 's-sec' }))
+      .toEqual({ kind: 'managed', label: '归 s-sec 管' })
+  })
+
+  it('labels a lead whose manager edge is gone as an orphan', () => {
+    expect(orgSessionMark({ ...emptyOrgView(), role: 'lead' })).toEqual({ kind: 'orphan', label: '孤儿' })
+  })
+
+  it('leaves independent sessions and absent views unlabelled', () => {
+    expect(orgSessionMark(undefined)).toBeUndefined()
+    expect(orgSessionMark(emptyOrgView())).toBeUndefined()
+    expect(orgSessionMark({ ...emptyOrgView(), role: 'secretary' })).toBeUndefined()
   })
 })

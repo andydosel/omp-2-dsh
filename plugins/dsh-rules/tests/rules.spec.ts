@@ -1,7 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { composeAdvisoryText, resolveAdvisoryPath } from '../src/advisory.ts'
+import { composeAdvisoryText, loadAdvisorySources, resolveAdvisoryPath } from '../src/advisory.ts'
 import { resolveConfig } from '../src/config.ts'
 import { matchGateRule, RulesGate } from '../src/gate.ts'
 import { firstPathMatch, globToRegExp, normalizePath } from '../src/glob.ts'
@@ -82,9 +84,9 @@ describe('gate rules', () => {
   })
 })
 
-describe('RulesGate service', () => {
+describe('RulesGate', () => {
   it('filters by tool name and turns a match into an approval ask', () => {
-    const gate = new RulesGate(new Context(), [{ tool: 'write', paths: ['**/src/**'] }, { tool: 'bash' }])
+    const gate = new RulesGate([{ tool: 'write', paths: ['**/src/**'] }, { tool: 'bash' }])
     expect(gate.match(call('read', { file_path: 'C:/proj/src/a.ts' }))).toBeUndefined()
     expect(gate.evaluate(call('write', { file_path: 'C:/proj/docs/a.ts' }))).toEqual({ kind: 'allow' })
     const decision = gate.evaluate(call('write', { file_path: 'C:/proj/src/a.ts' }))
@@ -109,6 +111,18 @@ describe('advisory resolution', () => {
     expect(normalizePath(resolveAdvisoryPath('~/r.md', home)).endsWith('/r.md')).toBe(true)
   })
 
+  it('truncates each source at the configured maxBytes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-rules-'))
+    try {
+      const path = join(dir, 'rules.md')
+      writeFileSync(path, 'abcdefghij')
+      const [source] = loadAdvisorySources([path], { dshHome: dir, maxBytes: 4 })
+      expect(source?.text).toBe('abcd\n…[truncated at 4 bytes]')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('renders nothing for no sources and labels loaded sources by path', () => {
     expect(composeAdvisoryText([])).toBe('')
     const text = composeAdvisoryText([{ path: 'C:/home/.dsh/AGENTS.md', text: 'Be terse.' }])
@@ -126,13 +140,16 @@ describe('config resolution', () => {
       advisoryOrder: 0,
     })
     expect(resolved.advisoryFiles).toEqual(['$DSH_HOME/AGENTS.md'])
+    expect(resolved.advisoryMaxBytes).toBe(16_384)
     expect(resolved.gateRules).toEqual([
       { tool: 'write', paths: ['**/src/**'] },
       { tool: 'bash' },
     ])
   })
 
-  it('fails loud on a blank tool name', () => {
+  it('fails loud on a blank tool name or an unknown key', () => {
     expect(() => resolveConfig({ advisoryFiles: [], gateRules: [{ tool: '  ' }], advisoryOrder: 0 })).toThrow()
+    expect(() => resolveConfig({ advisoryFiles: [], gateRules: [], advisoryOrder: 0, advisoryFile: [] } as never))
+      .toThrow(/unknown config key/)
   })
 })

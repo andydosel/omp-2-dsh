@@ -1,7 +1,7 @@
 {
   "name": "@dsh-plugin/dsh-compact-mode",
   "description": "Compact mode for the DeepSeek Harness: shake-first local elision backend for ctx.compaction with plan-style review and a review tree",
-  "version": "0.1.0-rc.6",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -35,7 +35,7 @@
   ],
   "engines": {
     "node": ">=24",
-    "dsh": "^0.2.0-rc.2"
+    "dsh": "^0.2.1-rc.2"
   },
   "dsh": {
     "manifestVersion": 1
@@ -46,43 +46,43 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4",
+    "@deepseek-ai/schemastery": "~3.18.5",
     "@dsh-plugin/tree-engine": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "4.4.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4",
-    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-atomic-write": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-commands": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-compaction": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-compaction-basic": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-compaction-tool-result-pruner": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-spill": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-storage": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-storage-domain": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-token-meter": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-util-values": "0.2.0-rc.2"
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-atomic-write": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-commands": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction-basic": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction-tool-result-pruner": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-spill": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-storage": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-storage-domain": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-token-meter": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-util-values": "^0.2.1-rc.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4",
-    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-atomic-write": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-commands": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-compaction": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-compaction-basic": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-compaction-tool-result-pruner": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-spill": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-storage": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-storage-domain": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-token-meter": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-agent": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-atomic-write": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-commands": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction-basic": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-compaction-tool-result-pruner": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-spill": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-storage": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-storage-domain": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-token-meter": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-util-values": "^0.2.1-rc.2",
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

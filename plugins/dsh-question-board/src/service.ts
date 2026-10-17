@@ -18,7 +18,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { renderAnswer } from './board.ts'
+import { plainQuestionText, renderAnswer } from './board.ts'
 import { registerQuestionBoardCommands } from './commands.ts'
 import { questionBoardProjection } from './projection.ts'
 import { defineAskQuestionTool } from './tool.ts'
@@ -54,6 +54,35 @@ export class QuestionBoardError extends Error {
   }
 }
 
+/**
+ * Structural probe for `ctx.userQuestions` (design §5.4's synchronous blocking
+ * branch). Kept local: this package reaches the service by global name, never
+ * by a package import.
+ */
+interface UserQuestionsProbe {
+  ask(request: {
+    questions: readonly {
+      id: string
+      question: string
+      options?: readonly { label: string; description?: string }[]
+    }[]
+    agent?: Agent
+    signal?: AbortSignal
+  }): Promise<{
+    answers: readonly { id: string; selected: readonly string[]; custom?: string }[]
+  }>
+}
+
+/** Structural probe for `ctx.approval`, the fallback blocking provider. */
+interface ApprovalProbe {
+  request(req: {
+    agent: Agent
+    toolName: string
+    reason?: string
+    signal?: AbortSignal
+  }): Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'>
+}
+
 /** The framework seams {@link QuestionBoardRuntime} reads through. */
 export interface QuestionBoardHost {
   /**
@@ -68,6 +97,16 @@ export interface QuestionBoardHost {
    * @returns the questions, or undefined when the projection is not registered.
    */
   board(session: Session): QuestionSnapshot[] | undefined
+  /**
+   * Resolve a blocking `ask_question` tool call that is waiting on this
+   * question. A panel answer is already durable, so the caller must NOT also
+   * deliver it as a wake.
+   * @param session - the asking session.
+   * @param id - the answered question id.
+   * @param answer - the human answer.
+   * @returns true when a waiting tool call consumed the answer.
+   */
+  resolveBlocking?(session: Session, id: string, answer: string | string[]): boolean
 }
 
 /**
@@ -126,6 +165,10 @@ export class QuestionBoardRuntime {
       throw new QuestionBoardError('answer must be a non-empty string or a non-empty array of non-empty strings', 'BAD_ANSWER')
     }
     session.append('question/answered', { id, answer })
+    // A blocking ask_question tool call may be waiting on this exact question:
+    // it receives the answer as its tool result, so delivering a second wake
+    // would duplicate it into the conversation.
+    if (this.#host.resolveBlocking?.(session, id, answer) === true) return true
     this.#deliver(session, question, answer)
     return true
   }
@@ -174,6 +217,8 @@ export class QuestionBoardRuntime {
  * The cordis entry: registers the `questionBoard` projection, the global
  * `ask_question` tool, and the panel's `/answer_question` /
  * `/dismiss_question` commands, and exposes the inbox as `ctx.questionBoard`.
+ * Its write/read methods live on {@link QuestionBoardService.runtime}, the same
+ * framework-free object the commands and tool drive — no forwarding surface.
  */
 export class QuestionBoardService extends Service {
   static inject = ['sessionProjections'] as const
@@ -181,57 +226,140 @@ export class QuestionBoardService extends Service {
   /** The framework-free inbox logic (the test seam). */
   readonly runtime: QuestionBoardRuntime
 
+  /**
+   * Blocking `ask_question` calls currently paused, keyed by session + question.
+   * A panel answer (`/answer_question`) resolves the exact waiting call instead
+   * of delivering a second wake.
+   */
+  private readonly blockingWaits = new Map<string, {
+    resolve(answer: string | string[]): void
+    cancel(): void
+  }>()
+
   /** @param ctx - the plugin context (sessionProjections is injected). */
   constructor(ctx: Context) {
     super(ctx, 'questionBoard')
     this.runtime = new QuestionBoardRuntime({
       agent: sessionId => ctx.get('agents')?.get(sessionId),
       board: session => ctx.sessionProjections.stateOf(session, 'questionBoard'),
+      resolveBlocking: (session, id, answer) => this.resolveBlocking(session, id, answer),
     })
     ctx.sessionProjections.register(questionBoardProjection)
     ctx.inject(['tools'], (toolsCtx) => {
-      toolsCtx.tools.register(defineAskQuestionTool({ ask: (session, request) => this.runtime.ask(session, request) }))
+      toolsCtx.tools.register(defineAskQuestionTool({
+        ask: (session, request) => this.runtime.ask(session, request),
+        askBlocking: (session, id, request, agent, signal) =>
+          this.askBlocking(session, id, request, agent, signal),
+      }))
     })
-    registerQuestionBoardCommands(ctx, this)
+    registerQuestionBoardCommands(ctx, this.runtime)
+  }
+
+  /** The wait map key: one blocking call per session-local question. */
+  private waitKey(session: Session, id: string): string {
+    return `${String(session.id)}\u0000${id}`
+  }
+
+  /** Resolve a waiting blocking call with a panel answer (see {@link QuestionBoardHost}). */
+  private resolveBlocking(session: Session, id: string, answer: string | string[]): boolean {
+    const key = this.waitKey(session, id)
+    const wait = this.blockingWaits.get(key)
+    if (wait === undefined) return false
+    this.blockingWaits.delete(key)
+    // Stop the competing userQuestions/approval wait; the panel answer wins.
+    wait.cancel()
+    wait.resolve(answer)
+    return true
   }
 
   /**
-   * Register a question in the asking session's inbox.
-   * @param session - the asking session.
-   * @param request - question body, options, and blocking intent.
-   * @returns the new question's id.
+   * Pause the calling turn until the human answers. The blocking branch reuses
+   * `ctx.userQuestions` (design §5.4), falling back to `ctx.approval` when the
+   * interactive question service is absent. A panel answer to the same
+   * question resolves the wait too, so either UI settles the same tool call.
    */
-  ask(session: Session, request: AskQuestionRequest): string {
-    return this.runtime.ask(session, request)
+  private async askBlocking(
+    session: Session,
+    id: string,
+    request: AskQuestionRequest,
+    agent: Agent | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<string> {
+    const userQuestions = this.ctx.get('userQuestions') as UserQuestionsProbe | undefined
+    const approval = this.ctx.get('approval') as ApprovalProbe | undefined
+    if (userQuestions === undefined && approval === undefined) {
+      throw new QuestionBoardError(
+        'blocking ask_question needs ctx.userQuestions or ctx.approval, neither of which is composed',
+        'NO_HUMAN_PROVIDER',
+      )
+    }
+    if (signal?.aborted === true) {
+      throw new QuestionBoardError('ask_question was aborted before the human answered', 'ASK_ABORTED')
+    }
+    const controller = new AbortController()
+    const onAbort = (): void => { controller.abort(signal?.reason) }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    const key = this.waitKey(session, id)
+    const question = plainQuestionText(request.content)
+    const panel = new Promise<string | string[]>((resolve) => {
+      this.blockingWaits.set(key, {
+        resolve,
+        cancel: () => { controller.abort() },
+      })
+    })
+    try {
+      if (userQuestions !== undefined) {
+        const asked = userQuestions.ask({
+          questions: [{
+            id,
+            question,
+            ...request.options === undefined ? {} : { options: request.options },
+          }],
+          ...agent === undefined ? {} : { agent },
+          signal: controller.signal,
+        })
+        const settled = await Promise.race([
+          asked.then(result => ({ source: 'questions' as const, value: result })),
+          panel.then(answer => ({ source: 'panel' as const, value: answer })),
+        ])
+        if (settled.source === 'panel') return normalizeAnswer(settled.value)
+        const answer = settled.value.answers.find(item => item.id === id) ?? settled.value.answers[0]
+        const text = answer === undefined
+          ? '(no answer)'
+          : [...answer.selected, ...(answer.custom === undefined || answer.custom.trim() === '' ? [] : [answer.custom.trim()])].join(', ') || '(no answer)'
+        session.append('question/answered', { id, answer: text })
+        return text
+      }
+      // Approval fallback: the prompt's reason IS the question; only an
+      // affirmative answer settles the ask.
+      if (agent === undefined) {
+        throw new QuestionBoardError('blocking ask_question has no live calling agent for ctx.approval', 'CALLER_NOT_LIVE')
+      }
+      const requested = approval!.request({
+        agent,
+        toolName: 'ask_question',
+        reason: question,
+        signal: controller.signal,
+      })
+      const settled = await Promise.race([
+        requested.then(outcome => ({ source: 'approval' as const, value: outcome })),
+        panel.then(answer => ({ source: 'panel' as const, value: answer })),
+      ])
+      if (settled.source === 'panel') return normalizeAnswer(settled.value)
+      if (settled.value !== 'allowed-once') {
+        throw new QuestionBoardError(`blocking ask_question was not answered (${settled.value})`, 'NOT_APPROVED')
+      }
+      session.append('question/answered', { id, answer: 'approved' })
+      return 'approved'
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+      this.blockingWaits.delete(key)
+    }
   }
+}
 
-  /**
-   * Answer a pending question.
-   * @param session - the session that owns the question.
-   * @param id - question id.
-   * @param answer - the human answer.
-   * @returns whether it transitioned to answered.
-   */
-  answer(session: Session, id: string, answer: string | string[]): boolean {
-    return this.runtime.answer(session, id, answer)
-  }
-
-  /**
-   * Dismiss a pending question.
-   * @param session - the session that owns the question.
-   * @param id - question id.
-   * @returns whether it transitioned to dismissed.
-   */
-  dismiss(session: Session, id: string): boolean {
-    return this.runtime.dismiss(session, id)
-  }
-
-  /**
-   * List a session's questions.
-   * @param session - the session whose inbox is read.
-   * @returns the questions in ask order.
-   */
-  list(session: Session): QuestionSnapshot[] {
-    return this.runtime.list(session)
-  }
+/** Normalize a panel/human answer to one display string. */
+function normalizeAnswer(answer: string | string[]): string {
+  const text = Array.isArray(answer) ? answer.join(', ') : answer
+  return text.trim() === '' ? '(no answer)' : text
 }

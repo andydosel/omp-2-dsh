@@ -2,7 +2,7 @@
  * Task-board domain vocabulary: the durable `task/*` session events, the
  * `taskBoard` session projection (host fold state + client wire value), and
  * the requirement-level {@link TaskSnapshot} the coordinator suite shares
- * (`DESIGN-COORDINATOR-SUITE-V1.0.md` §5.2 / §13.3).
+ * (`DESIGN-COORDINATOR-SUITE.md` §5.2 / §13.3).
  *
  * Everything here is declaration-only so the merges reach every consumer's
  * emitted `.d.ts` (see the `export type *` in `index.ts`).

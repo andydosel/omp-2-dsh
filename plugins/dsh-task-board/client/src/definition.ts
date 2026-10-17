@@ -97,7 +97,13 @@ function boardNode(context: ConversationNodeContext<TaskBoardState>, tasks: Task
     id: context.id,
     target: 'chat',
     anchorSeq: context.start?.event.seq ?? context.matches[0]?.event.seq ?? 0,
-    location: context.start?.location ?? context.matches[0]?.location ?? { kind: 'unresolved' },
+    // Session location, NOT the matched event's location: ui-chat folds every
+    // turn/step-located node whose kind is not in its private
+    // TURN_PROCESS_INDEPENDENT_KINDS set into the completed turn's "Called
+    // tools" disclosure and then hides it (`data-turn-process-hidden`), which
+    // left this panel in the DOM but invisible. A session-located node is a
+    // root transcript entry, sorted by anchorSeq at the board's natural place.
+    location: { kind: 'session' },
     visibility: 'visible',
     data: { tasks },
   }

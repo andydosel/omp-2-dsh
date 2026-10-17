@@ -1,8 +1,8 @@
 /**
  * Shared tsdown preset for this package's client bundle, copied from the dsh
  * monorepo preset (`packages/client/tsdown.client.ts`, MIT) and adapted for
- * the out-of-tree layout: the host half is emitted by tsc directly to
- * `lib/src/`, and tsdown emits ONLY the browser bundle (`lib/client.js`).
+ * the out-of-tree layout: the host half is emitted by the host tsconfig to
+ * `lib/`, and tsdown emits ONLY the browser bundle (`lib/client.js`).
  * Emits a closure-factory artifact: the bundle calls
  * `window.__ModuleLoader__.load({id, factory})` and resolves externals
  * through the injected require (loader module table — cordis DI entities, no
@@ -211,8 +211,8 @@ function clientConfig(id: string, entry: string): UserConfig {
 function sourceAssetPath(source: string, importer: string): string {
   const emitted = resolvePath(dirname(importer), source)
   if (existsSync(emitted)) return emitted
-  // tsc emits from the package root (rootDir ".") into lib/<rel>; the source
-  // tree counterpart is <rel> (client/src/..., src/...).
+  // tsc may emit a mirrored tree into lib/<rel>; the source-tree counterpart
+  // is <rel> (client/src/..., src/...).
   const prefix = `${sep}lib${sep}`
   const boundary = emitted.indexOf(prefix)
   if (boundary < 0) return emitted

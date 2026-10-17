@@ -18,6 +18,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { Session } from '@deepseek-ai/dsh-session'
+import { describeError } from '@dsh-plugin/dsh-util/error'
 
 /** Answer one pending question; the panel's primary action. */
 export const ANSWER_QUESTION_COMMAND = 'answer_question'
@@ -91,7 +92,7 @@ export function questionCommandHandler(
     // question can be transitioned, and the panel lists exactly those.
     if (!transitioned) return { kind: 'error', text: `/${name}: ${id} is not a pending question` }
   } catch (error) {
-    return { kind: 'error', text: `/${name}: ${error instanceof Error ? error.message : String(error)}` }
+    return { kind: 'error', text: `/${name}: ${describeError(error)}` }
   }
   return {
     kind: 'success',

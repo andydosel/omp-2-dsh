@@ -101,6 +101,22 @@ describe('review-gate wiring', () => {
     })
   })
 
+  it('hands the armed task to the task board for --review and --plan', async () => {
+    const session = liveSession('session-7')
+    const marked: string[] = []
+    ctx.provide('taskBoard', {
+      markAwaitingApproval: (target: Session) => { marked.push(String(target.id)) },
+    } as never)
+
+    await preStep(agentFor(session), [userMessage('draft the migration --plan')], 1)
+    await preStep(agentFor(session), [userMessage('implement it --review')], 2)
+    expect(marked).toEqual(['session-7', 'session-7'])
+
+    // --no-review does not hand anything to the board.
+    await preStep(agentFor(session), [userMessage('go ahead --no-review')], 3)
+    expect(marked).toHaveLength(2)
+  })
+
   it('leaves unflagged input untouched', async () => {
     const session = liveSession('session-2')
     const decision = await preStep(agentFor(session), [userMessage('just do it')], 1)

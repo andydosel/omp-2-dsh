@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, type Mock } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock, MessageId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { drainWorkers, interruptWorker, sendWorkerMessage, startWorker } from '../src/spawn.ts'
+import { drainWorkers, interruptWorker, sendWorkerMessage, startWorker, WORKER_INHERITED_TOOLS } from '../src/spawn.ts'
 import { resolveWorkerSpawnConfig, tierAgentOptions } from '../src/types.ts'
 import { makeSpawner } from './harness.ts'
 
@@ -12,6 +12,9 @@ interface StartCall {
   label: string
   prompt: string
   parentId: string
+  delivery: 'parent' | 'caller'
+  agentPreset?: string
+  cwd?: string
   agentOptions?: { provider?: string; model?: string }
   aborted: boolean
 }
@@ -24,10 +27,17 @@ class MockSubagents {
   readonly drains: string[][] = []
   private counter = 0
 
-  async startContinuable(spec: {
+  async startActivation(spec: {
     provider: string
     label: string
-    request: { prompt: ContentBlock[]; parent: Agent; agentOptions?: { provider?: string; model?: string } }
+    request: {
+      prompt: ContentBlock[]
+      parent: Agent
+      agentPreset?: string
+      cwd?: string
+      agentOptions?: { provider?: string; model?: string }
+    }
+    delivery: 'parent' | 'caller'
     signal: AbortSignal
   }): Promise<{ childId: SessionId; messageId: MessageId }> {
     this.counter += 1
@@ -37,6 +47,9 @@ class MockSubagents {
       label: spec.label,
       prompt: (spec.request.prompt[0] as { text?: string } | undefined)?.text ?? '',
       parentId: spec.request.parent.id,
+      delivery: spec.delivery,
+      ...spec.request.agentPreset === undefined ? {} : { agentPreset: spec.request.agentPreset },
+      ...spec.request.cwd === undefined ? {} : { cwd: spec.request.cwd },
       ...spec.request.agentOptions === undefined ? {} : { agentOptions: spec.request.agentOptions },
       aborted: spec.signal.aborted,
     })
@@ -62,16 +75,21 @@ class MockSubagents {
     this.interrupts.push({ targetId, authorityKind: authority.kind, agentId: authority.agent.id })
   }
 
-  async drainContinuableDescendants(parents: readonly Agent[]): Promise<void> {
+  async drainDescendants(parents: readonly Agent[]): Promise<void> {
     this.drains.push(parents.map(agent => agent.id))
   }
 }
 
 /** Mount the mock subagents service on a bare context. */
-function withMock(): { ctx: Context; mock: MockSubagents } {
+function withMock(child?: { restrict: Mock; schemas?: () => { name: string }[] }): { ctx: Context; mock: MockSubagents } {
   const ctx = new Context()
   const mock = new MockSubagents()
   ctx.provide('subagents', mock as never)
+  ctx.provide('agents', {
+    get: () => (child === undefined ? undefined : {
+      ctx: { tools: { restrict: child.restrict, ...child.schemas === undefined ? {} : { schemas: child.schemas } } },
+    }),
+  } as never)
   return { ctx, mock }
 }
 
@@ -113,6 +131,7 @@ describe('spawn-in-process dispatch', () => {
       label: 'fast worker',
       prompt: 'do the thing',
       parentId: 'parent-1',
+      delivery: 'parent',
       agentOptions: { provider: 'mock', model: 'fast-model' },
       aborted: false,
     }])
@@ -135,9 +154,93 @@ describe('spawn-in-process dispatch', () => {
       label: 'reviewer',
       prompt: 'judge it',
       parentId: 'parent-2',
+      delivery: 'parent',
       aborted: false,
     })
     expect(Object.hasOwn(mock.starts[0]!, 'agentOptions')).toBe(false)
+  })
+
+  it('forwards the 0.2.1 agentPreset/cwd request fields', async () => {
+    const { ctx, mock } = withMock()
+    const parent = makeSpawner('parent-preset')
+    await startWorker(ctx, {
+      parent,
+      tier: 'good',
+      prompt: 'work in the sandbox',
+      agentPreset: 'standard',
+      cwd: 'C:/work/tree',
+      signal: new AbortController().signal,
+    })
+    expect(mock.starts[0]).toEqual({
+      provider: 'spawn',
+      label: 'good worker',
+      prompt: 'work in the sandbox',
+      parentId: 'parent-preset',
+      delivery: 'parent',
+      agentPreset: 'standard',
+      cwd: 'C:/work/tree',
+      aborted: false,
+    })
+  })
+
+  it('restricts a local worker scope to implementation tools', async () => {
+    const restrict = vi.fn()
+    const { ctx } = withMock({ restrict })
+    const parent = makeSpawner('parent-r')
+    await startWorker(ctx, {
+      parent,
+      tier: 'good',
+      prompt: 'implement it',
+      signal: new AbortController().signal,
+    })
+    expect(restrict).toHaveBeenCalledTimes(1)
+    expect(restrict).toHaveBeenCalledWith({ allow: WORKER_INHERITED_TOOLS })
+    for (const tool of ['read', 'write', 'edit', 'bash', 'glob', 'grep', 'lsp']) {
+      expect(WORKER_INHERITED_TOOLS).toContain(tool)
+    }
+    for (const tool of ['peer_send', 'task_new', 'task_update', 'task_close', 'task_reopen', 'task_list', 'ask_question']) {
+      expect(WORKER_INHERITED_TOOLS).not.toContain(tool)
+    }
+  })
+
+  it('intersects the allow-list with the tools the child scope actually inherits', async () => {
+    const restrict = vi.fn()
+    const { ctx } = withMock({
+      restrict,
+      schemas: () => ['read', 'write', 'subtask_parallel'].map(name => ({ name })),
+    })
+    const warn = vi.spyOn(ctx.logger, 'warn')
+    const parent = makeSpawner('parent-i')
+    await startWorker(ctx, {
+      parent,
+      tier: 'good',
+      prompt: 'implement it',
+      signal: new AbortController().signal,
+    })
+    expect(restrict).toHaveBeenCalledWith({ allow: ['read', 'write', 'subtask_parallel'] })
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('does not inherit tool(s)'),
+      expect.anything(),
+      expect.stringContaining('lsp'),
+      expect.anything(),
+    )
+  })
+
+  it('honors a brief toolFilter (narrower than the worker vocabulary)', async () => {
+    const restrict = vi.fn()
+    const { ctx } = withMock({
+      restrict,
+      schemas: () => ['read', 'write', 'edit', 'bash', 'glob'].map(name => ({ name })),
+    })
+    const parent = makeSpawner('parent-f')
+    await startWorker(ctx, {
+      parent,
+      tier: 'good',
+      prompt: 'read only',
+      toolFilter: ['read', 'glob', 'bash'],
+      signal: new AbortController().signal,
+    })
+    expect(restrict).toHaveBeenCalledWith({ allow: ['read', 'glob', 'bash'] })
   })
 
   it('sends a follow-up turn with the live sender and no source descriptor', async () => {

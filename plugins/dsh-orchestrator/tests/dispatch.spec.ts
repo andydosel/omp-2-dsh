@@ -41,6 +41,7 @@ function makeHost() {
   const composed: ComposedScope[] = []
   const creates: Array<{ sessionId: string; cwd?: string }> = []
   const starts: Array<{ provider: string; label: string; prompt: string; agentOptions?: unknown }> = []
+  const workerRestricts: string[][] = []
   const disposed: string[] = []
   /** When true, a spawned worker never settles its first turn (timeout path). */
   let silentSpawn = false
@@ -100,7 +101,7 @@ function makeHost() {
   } as never)
 
   ctx.provide('subagents', {
-    startContinuable: async (spec: {
+    startActivation: async (spec: {
       provider: string
       label: string
       request: { prompt: readonly ContentBlock[]; parent: Agent; agentOptions?: unknown }
@@ -115,7 +116,21 @@ function makeHost() {
       const childId = SessionId('worker-1')
       const session = Session.create(childId)
       sessions.set(childId, session)
-      live.set(childId, { id: childId, session, options: {}, status: 'running' } as unknown as Agent)
+      live.set(childId, {
+        id: childId,
+        session,
+        options: {},
+        status: 'running',
+        ctx: {
+          tools: {
+            schemas: () => ['read', 'grep', 'glob', 'write', 'todo_write'].map(name => ({ name })),
+            restrict: (filter: { allow?: readonly string[] }) => {
+              workerRestricts.push([...(filter.allow ?? [])])
+              return () => {}
+            },
+          },
+        },
+      } as unknown as Agent)
       if (!silentSpawn) {
         // Real timing: the child's first turn settles AFTER the dispatcher
         // registered its wait, so the wait resolves on the firehose event.
@@ -123,7 +138,7 @@ function makeHost() {
           settleTurn(ctx, session, 1, 'worker output')
         }, 0)
       }
-      return { childId, messageId: 'message-1' }
+      return { childId, messageId: 'message-1', dispose: async () => {} }
     },
     sendMessage: async () => 'message-2',
   } as never)
@@ -133,6 +148,7 @@ function makeHost() {
     composed,
     creates,
     starts,
+    workerRestricts,
     disposed,
     sessions,
     created,
@@ -169,6 +185,26 @@ describe('worker dispatch', () => {
       prompt: 'do the thing',
       agentOptions: { model: 'fast-model' },
     }])
+    dispatcher.dispose()
+  })
+
+  it('narrows a worker to the brief toolFilter, dropping non-worker and absent names', async () => {
+    const host = makeHost()
+    const dispatcher = createDispatcher(host.ctx, makeAgent('carrier-1'), options())
+    const outcome = await dispatcher.dispatch(
+      {
+        role: 'worker',
+        tier: 'good',
+        brief: 'read and write only',
+        label: 'subtask-f',
+        toolFilter: ['read', 'peer_send', 'bash', 'write'],
+      },
+      new AbortController().signal,
+    )
+    expect(outcome.status).toBe('completed')
+    // peer_send is outside the worker vocabulary; bash is absent from this
+    // child's preset. Only the intersection reaches `tools.restrict`.
+    expect(host.workerRestricts).toEqual([['read', 'write']])
     dispatcher.dispose()
   })
 

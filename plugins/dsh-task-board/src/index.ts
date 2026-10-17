@@ -1,7 +1,7 @@
 /**
  * dsh-task-board: the persistent requirement-level task ledger plus the
  * attention work set for the coordinator suite
- * (`DESIGN-COORDINATOR-SUITE-V1.0.md` §5.2 / §13.3).
+ * (`DESIGN-COORDINATOR-SUITE.md` §5.2 / §13.3).
  *
  * - durable events: `task/new`, `task/update` (whole-value, revision CAS),
  *   `task/closed`, `task/reopened` — all replayable, tombstones included
@@ -37,8 +37,10 @@ export const name = 'dsh-task-board'
 export default TaskBoardService
 export { TaskBoardService }
 export {
+  Config,
   DEFAULT_AUTO_CLOSE_SIGNALS,
   DEFAULT_MAX_CONTEXT_BYTES,
+  KNOWN_CONFIG_KEYS,
   TaskNotFoundError,
   TaskRevisionConflictError,
   matchesAutoCloseSignal,
@@ -65,7 +67,6 @@ export {
   upsertTask,
   viewTaskBoard,
   visibleTasks,
-  workSetTasks,
 } from './projection.ts'
 
 export { WORK_SET_HEADER, WORK_SET_ORDER, WORK_SET_SECTION, renderWorkSet } from './workset.ts'

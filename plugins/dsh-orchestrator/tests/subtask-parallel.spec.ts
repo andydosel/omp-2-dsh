@@ -94,6 +94,38 @@ describe('subtask_parallel', () => {
     await expect(run(harness, lead, { tasks: bigTasks(1) })).rejects.toThrow(/budget-exhausted/)
   })
 
+  it('propagates a per-call maxDepth to the children\'s own fan-outs', async () => {
+    const harness = makeHarness({ fanOut: { maxDepth: 5 } })
+    const lead = harness.addAgent(makeAgent('lead'))
+    const child = harness.addAgent(makeAgent('child', lead))
+    await expect(run(harness, lead, { tasks: bigTasks(2), maxDepth: 1 })).resolves.toBeDefined()
+    // The child is at depth 1: the parent's call cap (1) now refuses it, even
+    // though the deployment cap is 5.
+    await expect(run(harness, child, { tasks: bigTasks(2) })).rejects.toThrow(/depth-exhausted/)
+  })
+
+  it('propagates a per-call maxTotalAgents budget to the children\'s own fan-outs', async () => {
+    const harness = makeHarness({ fanOut: { maxTotalAgents: 10, maxDepth: 5 } })
+    const lead = harness.addAgent(makeAgent('lead'))
+    const child = harness.addAgent(makeAgent('child', lead))
+    await expect(run(harness, lead, { tasks: bigTasks(2), maxTotalAgents: 3 })).resolves.toBeDefined()
+    // The flow already spent 2 of the parent's tighter 3-agent budget.
+    await expect(run(harness, child, { tasks: bigTasks(2) })).rejects.toThrow(/budget-exhausted/)
+  })
+
+  it('passes the brief toolFilter through to the dispatch request', async () => {
+    const harness = makeHarness()
+    const lead = harness.addAgent(makeAgent('lead'))
+    await run(harness, lead, {
+      tasks: [
+        { brief: 'read only ' + 'x'.repeat(5000), toolFilter: ['read', 'grep'] },
+        { brief: 'write ' + 'x'.repeat(5000) },
+      ],
+    })
+    expect(harness.dispatcher.requests[0]!.toolFilter).toEqual(['read', 'grep'])
+    expect(harness.dispatcher.requests[1]!.toolFilter).toBeUndefined()
+  })
+
   it('surfaces reviewer findings and their parse state', async () => {
     const harness = makeHarness()
     const lead = harness.addAgent(makeAgent('lead'))

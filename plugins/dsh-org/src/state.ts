@@ -8,23 +8,22 @@
  * The one hard rule is "one secretary per session": {@link grantClaim} throws
  * when a DIFFERENT secretary already manages the target. The fold itself
  * ({@link applyOrgEvent}) mirrors that edge non-throwingly so replaying a
- * hand-authored conflicting log cannot blow up the projection drive; the
+ * hand-authored conflicting log cannot blow up the projection drive, and it
+ * never resurrects a forbidden edge regardless of cross-log replay order; the
  * service is where the invariant is enforced before an event is ever appended.
  *
  * @module @dsh-plugin/dsh-org/state
  */
 
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { toSessionId } from '@dsh-plugin/dsh-util/session'
 import type { OrgRole, OrgState } from './types.ts'
+
+export { toSessionId }
 
 /** An empty organisation state (nothing claimed, forbidden, or assigned). */
 export function emptyOrgState(): OrgState {
   return { manager: {}, forbidden: {}, roles: {} }
-}
-
-/** Brand a plain string (or pass a branded id through) for map keys. */
-export function toSessionId(id: SessionId | string): SessionId {
-  return SessionId(id)
 }
 
 /** The secretary managing `targetId`, or undefined when it is independent. */
@@ -60,8 +59,13 @@ export function roleOf(state: OrgState, sessionId: SessionId | string): OrgRole 
 /**
  * Apply a claim without the conflict check: set the manager edge and stamp both
  * roles. Same reference when the edge and roles are already exactly this.
+ * A forbidden pair is never re-established: logs fold in arbitrary cross-session
+ * order, so a target's old `org/claim` replayed after the secretary's
+ * `org/forbid` must not resurrect the edge (the service enforces the same rule
+ * before appending, and {@link grantClaim} throws).
  */
 function applyClaim(state: OrgState, secretaryId: SessionId, targetId: SessionId): OrgState {
+  if (isForbidden(state, secretaryId, targetId)) return state
   const unchanged = managerOf(state, targetId) === secretaryId
     && roleOf(state, targetId) === 'lead'
     && roleOf(state, secretaryId) === 'secretary'
@@ -157,32 +161,6 @@ export function setRole(state: OrgState, sessionId: SessionId, role: OrgRole | u
 }
 
 /**
- * Record a task assignment. Assignments are informational for the coarse global
- * state (its durable home is the acting session's `org/assign` event and the
- * `org` projection), so this transition is the explicit identity case of the
- * fold — it keeps the whole vocabulary enumerated and returns the same state.
- */
-export function recordAssignment(
-  state: OrgState,
-  _secretaryId: SessionId,
-  _leadId: SessionId,
-  _subject: string,
-  _brief: string,
-  _taskId?: string,
-): OrgState {
-  return state
-}
-
-/**
- * Record a user-facing notice. Notices live in the per-session `org`
- * projection, not in the coarse global state; this is the identity case of the
- * fold (see {@link recordAssignment}).
- */
-export function recordNotice(state: OrgState, _content: string): OrgState {
-  return state
-}
-
-/**
  * Fold one committed session event into the organisation state. Events that are
  * not `org/*` (or an `org/*` event that changes nothing) return the SAME state
  * reference.
@@ -197,13 +175,15 @@ export function applyOrgEvent(state: OrgState, event: SessionEvent): OrgState {
     case 'org/relinquish':
       return relinquishEdge(state, event.data.secretaryId, event.data.targetId)
     case 'org/forbid':
+    case 'org/forbidden':
       return addForbidden(state, event.data.secretaryId, event.data.targetId)
     case 'org/role':
       return setRole(state, event.data.sessionId, event.data.role)
     case 'org/assign':
-      return recordAssignment(state, event.data.secretaryId, event.data.leadId, event.data.subject, event.data.brief, event.data.taskId)
     case 'org/notice':
-      return recordNotice(state, event.data.content)
+      // Informational for the coarse state: both events' durable home is the
+      // acting session's log and the per-session `org` projection.
+      return state
     default:
       return state
   }

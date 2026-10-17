@@ -77,7 +77,12 @@ export const questionBoardDefinition: ConversationNodeDefinition<QuestionBoardNo
       id: context.id,
       target: 'chat',
       anchorSeq: state.data.seq,
-      location: start.location,
+      // Session location, NOT the first question's location: ui-chat folds
+      // every turn/step-located node whose kind is not in its private
+      // TURN_PROCESS_INDEPENDENT_KINDS set into the completed turn's "Called
+      // tools" disclosure and then hides it. A session-located node stays a
+      // root transcript entry while the asker's key/anchor remain stable.
+      location: { kind: 'session' },
       visibility: 'visible',
       data: state.data,
     }

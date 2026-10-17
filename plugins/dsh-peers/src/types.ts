@@ -114,7 +114,9 @@ export interface PeersServiceApi {
 /**
  * Structural probe for the optional `dsh-org` service. A `true` from
  * `isForbidden` is a HARD authorization block on `peer_send` (the negative
- * grant is authoritative; `dsh-peers` never imports `dsh-org`).
+ * grant is authoritative; `dsh-peers` never imports `dsh-org`). The optional
+ * readers let the channel grant its positive edges — manager/managed and
+ * coordinator — without an import edge either way.
  */
 export interface OrgForbiddenProbe {
   /**
@@ -123,7 +125,13 @@ export interface OrgForbiddenProbe {
    * @param targetId - the candidate target.
    * @returns true to block the send.
    */
-  isForbidden(secretaryId: SessionId, targetId: SessionId): boolean
+  isForbidden?(secretaryId: SessionId, targetId: SessionId): boolean
+  /** The folded role of a session, when the probe exposes it. */
+  roleOf?(sessionId: SessionId): 'secretary' | 'lead' | undefined
+  /** The secretary managing a session, when the probe exposes it. */
+  managerOf?(targetId: SessionId): SessionId | undefined
+  /** The sessions one secretary manages, when the probe exposes it. */
+  managesOf?(secretaryId: SessionId): SessionId[]
 }
 
 declare module '@deepseek-ai/dsh-session/types' {

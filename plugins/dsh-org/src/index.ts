@@ -1,5 +1,5 @@
 /**
- * dsh-org: the secretary/lead organisation layer (DESIGN-COORDINATOR-SUITE-V1.0.md
+ * dsh-org: the secretary/lead organisation layer (DESIGN-COORDINATOR-SUITE.md
  * §5.1 / §5.6 / §5.9 / §5.10 / §13.6).
  *
  * - durable events: `org/claim`, `org/relinquish`, `org/forbid`, `org/role`,
@@ -22,13 +22,17 @@
  * Client face: the `org` projection's wire view (role, manager edge, manages,
  * forbidden, notices) is the whole client contract for the session panel. The
  * browser half (`client/src/index.ts`, shipped as `lib/client.js` behind this
- * package's `dsh.client` + `exports["./client"]` declaration) registers one
- * `conversation.input.dock` entry: it lists the sessions this secretary
- * manages, one row per session, each offering release (`/org relinquish <id>`)
- * and forbid (`/org forbid <id>`). The panel reads this package's own
- * projection through the standard-kit `useProjection('org')` (zero client-side
- * folding) and mutates through those slash commands, so the host half needs no
- * client-specific API surface.
+ * package's `dsh.client` + `exports["./client"]` declaration) registers:
+ * - one `conversation.input.dock` entry: it lists the sessions this secretary
+ *   manages, one row per session, each offering release (`/org relinquish <id>`)
+ *   and forbid (`/org forbid <id>`);
+ * - two `ui-workspace` global session-list seats: a leading dot and the hover
+ *   relation line, both reading the same `org` projection and labelling a row
+ *   "归 X 管" (managed) or "孤儿" (a lead whose manager edge is gone).
+ *
+ * The panel reads this package's own projection through the standard-kit
+ * `useProjection('org')` (zero client-side folding) and mutates through those
+ * slash commands, so the host half needs no client-specific API surface.
  *
  * @module @dsh-plugin/dsh-org
  */
@@ -71,8 +75,6 @@ export {
   managerOf,
   managesOf,
   orgStateFromEvents,
-  recordAssignment,
-  recordNotice,
   relinquishEdge,
   roleOf,
   setRole,
@@ -86,6 +88,7 @@ export {
 } from './paths.ts'
 export type { PathGateDecision, PathGateInput } from './paths.ts'
 export {
+  Config,
   defaultLeadWritePaths,
   defaultSecretaryReadPaths,
   defaultSecretaryWritePaths,
@@ -106,7 +109,6 @@ export {
   defineReportTool,
   defineSecretaryTools,
   defineSummarizeReportsTool,
-  escapeXml,
   LEAD_TOOL_NAMES,
   SECRETARY_TOOL_NAMES,
 } from './tools.ts'
@@ -134,9 +136,9 @@ export class OrgController extends OrgService {
     registerOrgCommands(ctx, this, this.deps)
     registerOrgProjection(ctx)
     // Late load: sessions already live and already carrying a folded role.
-    for (const agent of ctx.agents.list()) this.#syncEnvelope(agent)
+    for (const agent of ctx.agents.list()) this.syncEnvelope(agent)
     ctx.on('agent/created', ({ agent }) => {
-      this.#syncEnvelope(agent)
+      this.syncEnvelope(agent)
       return undefined
     })
   }
@@ -146,7 +148,7 @@ export class OrgController extends OrgService {
    * application is idempotent per agent object, so the creation paths that
    * already composed it (`spawnLead` setup, `/org on`) are not doubled.
    */
-  #syncEnvelope(agent: Agent): void {
+  private syncEnvelope(agent: Agent): void {
     const role = this.roleOf(agent.id)
     if (role !== 'secretary' && role !== 'lead') return
     try {

@@ -1,8 +1,8 @@
 /**
  * `@dsh-plugin/dsh-worker-spawn` — the reusable worker-spawn core extracted
  * from dsh-vibe-mode's DIRECTOR mode: the `fast`/`good` dispatch tier routing,
- * the spawn-in-process dispatch primitives (`spawn`/`sendMessage`/`interrupt`/
- * `drainContinuableDescendants`), and the per-spawner `WorkerRegistry`
+ * the spawn-in-process dispatch primitives (`startActivation`/`sendMessage`/`interrupt`/
+ * `drainDescendants`), and the per-spawner `WorkerRegistry`
  * (registration, lifecycle, roster, and turn-precise wait semantics).
  *
  * Pure library: it declares no cordis service, no Context key, and no plugin
@@ -36,5 +36,5 @@ export type {
 export { childSessionEvents, completedTurnsOf, WorkerRegistry } from './workers.ts'
 export type { TurnEndResult, WaitForTurnOptions, WorkerRecord } from './workers.ts'
 
-export { drainWorkers, interruptWorker, sendWorkerMessage, startWorker } from './spawn.ts'
+export { WORKER_INHERITED_TOOLS, drainWorkers, interruptWorker, sendWorkerMessage, startWorker } from './spawn.ts'
 export type { SpawnWorkerSpec, StartedWorker } from './spawn.ts'

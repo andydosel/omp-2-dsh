@@ -11,6 +11,7 @@
  */
 
 import path from 'node:path'
+import { globToRegExp as compileGlob } from '@dsh-plugin/dsh-util/glob'
 
 /** Classification of one write target. */
 export type PathClass = 'scratch' | 'protected' | 'other'
@@ -27,42 +28,15 @@ export interface PathClassRequest {
   readonly scratchDir: string
 }
 
-/** Regex metacharacters that must survive literal in a glob conversion. */
-const REGEX_SPECIAL = /[.+^${}()|[\]\\]/g
-
 /**
- * Convert one glob to an anchored regular expression. Supports `**` (any run of
- * path segments), `*` (within one segment) and `?` (one non-separator
- * character); everything else is literal.
+ * Convert one glob to an anchored regular expression. The shared engine's
+ * syntax, with case-insensitivity forced on every platform: fencing a
+ * mis-cased path can only protect MORE, never less.
  * @param pattern - the glob, in posix form.
  * @returns a case-insensitive anchored matcher.
  */
 export function globToRegExp(pattern: string): RegExp {
-  const source = pattern.replaceAll('\\', '/')
-  let out = ''
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index]!
-    if (char === '*') {
-      if (source[index + 1] === '*') {
-        index += 1
-        if (source[index + 1] === '/') {
-          index += 1
-          out += '(?:[^/]+/)*'
-        } else {
-          out += '.*'
-        }
-      } else {
-        out += '[^/]*'
-      }
-      continue
-    }
-    if (char === '?') {
-      out += '[^/]'
-      continue
-    }
-    out += char.replace(REGEX_SPECIAL, '\\$&')
-  }
-  return new RegExp(`^${out}$`, 'i')
+  return compileGlob(pattern, { caseInsensitive: true })
 }
 
 /**

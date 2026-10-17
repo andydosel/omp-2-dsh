@@ -1,6 +1,6 @@
 /**
- * `ctx.orchestrator`: the review loop's effects, and the fan-out gates' view of
- * the world.
+ * The orchestrator runtime: the review loop's effects, and the fan-out gates'
+ * view of the world.
  *
  * Responsibilities:
  * - **Fan-out accounting** — the delegation depth and the spent budget the
@@ -25,16 +25,17 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { GoalBlockReason, GoalRef, GoalView } from '@deepseek-ai/dsh-goal'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
-import { interruptWorker, startWorker, sendWorkerMessage } from '@dsh-plugin/dsh-worker-spawn'
-import { renderCompletionReport, renderLoopMethodology, renderReviewerBrief } from './briefs.ts'
+import { interruptWorker, startWorker, sendWorkerMessage, WORKER_INHERITED_TOOLS } from '@dsh-plugin/dsh-worker-spawn'
+import { describeError } from '@dsh-plugin/dsh-util/error'
+import { renderBlockNotice, renderCompletionReport, renderLoopMethodology, renderReviewerBrief } from './briefs.ts'
 import type { ResolvedOrchestratorConfig } from './config.ts'
 import type { DispatcherOptions, SubTaskDispatcher, SubTaskOutcome } from './dispatch.ts'
 import { createDispatcher } from './dispatch.ts'
 import { planFanOut } from './fanout.ts'
-import type { FanOutPlan, FanOutRequest, SubTaskRole, SubTaskTier } from './fanout.ts'
+import type { FanOutBounds, FanOutPlan, FanOutRequest, SubTaskRole, SubTaskTier } from './fanout.ts'
 import type { ReviewTally } from './findings.ts'
 import { ReviewLoop } from './loop.ts'
 import type { FilteredFinding, LoopSnapshot, RejectionRequest } from './loop.ts'
@@ -42,6 +43,48 @@ import type { RoundResult, SubTaskResult } from './types.ts'
 
 /** How many ancestors the root walk may climb before it gives up on a cycle. */
 const ROOT_WALK_LIMIT = 32
+
+/**
+ * The review-work carrier's OWN tools. A carrier is started through the shared
+ * worker base (so it keeps the implementation tools plus `subtask_parallel`),
+ * and these review-loop controls sit outside the worker allow-list — without
+ * them a restricted carrier could not run a round, filter, or close the loop.
+ */
+export const REVIEW_CARRIER_TOOLS: readonly string[] = [
+  'review_round',
+  'review_filter',
+  'review_finish',
+  'review_complete',
+  'review_block',
+  'review_resume',
+]
+
+/** The task-board row fields this plugin reads and writes (structural, no import). */
+interface BoardTask {
+  readonly id: string
+  readonly revision: number
+  readonly status: string
+}
+
+/** The subset of `ctx.taskBoard` the review loop mirrors its state onto. */
+interface TaskBoardSyncProbe {
+  list(session: Session): readonly BoardTask[]
+  create(session: Session, input: { subject: string; owner?: SessionId | string }): BoardTask
+  update(
+    session: Session,
+    id: string,
+    patch: {
+      status?: string
+      reviewRound?: number
+      findings?: readonly { severity: string; summary: string; sourceRound: number }[]
+      filteredFindings?: readonly { severity: string; summary: string; sourceRound: number }[]
+    },
+    revision?: number,
+  ): BoardTask
+}
+
+/** Task states that are already out of the work set. */
+const TERMINAL_TASK_STATUS: Readonly<Record<string, true>> = { completed: true, closed: true, deleted: true }
 
 /** One loop as the service reports it. */
 export interface LoopSummary {
@@ -88,11 +131,22 @@ export type DispatcherFactory = (
   options: DispatcherOptions,
 ) => SubTaskDispatcher
 
+/** One flow's spend and the tighter per-call bounds a parent fan-out propagated. */
+interface FlowBudget {
+  spent: number
+  /** The effective depth cap a parent call established (already min'ed with config). */
+  maxDepth?: number
+  /** The effective total-agent budget a parent call established. */
+  maxTotalAgents?: number
+}
+
 /** The review-loop and fan-out effects of this plugin. */
 export class OrchestratorRuntime {
   private readonly loops = new Map<SessionId, ReviewLoop>()
   private readonly dispatchers = new Map<SessionId, SubTaskDispatcher>()
-  private readonly budgets = new Map<string, number>()
+  private readonly budgets = new Map<string, FlowBudget>()
+  /** The task-board row each loop currently mirrors onto (created on demand). */
+  private readonly boardTasks = new Map<string, string>()
 
   constructor(
     private readonly ctx: Context,
@@ -145,15 +199,29 @@ export class OrchestratorRuntime {
     return current.id
   }
 
-  /** Sub-agents already dispatched by the calling agent's flow. */
-  private spent(agent: Agent): number {
-    return this.budgets.get(this.rootKey(agent)) ?? 0
+  /** The flow state one agent belongs to (created on demand). */
+  private flow(agent: Agent): FlowBudget {
+    const key = this.rootKey(agent)
+    const existing = this.budgets.get(key)
+    if (existing !== undefined) return existing
+    const created: FlowBudget = { spent: 0 }
+    this.budgets.set(key, created)
+    return created
   }
 
-  /** Charge dispatched sub-agents to the calling agent's flow budget. */
-  private account(agent: Agent, count: number): void {
-    const key = this.rootKey(agent)
-    this.budgets.set(key, (this.budgets.get(key) ?? 0) + count)
+  /**
+   * The gate bounds for one flow: the deployment config, tightened by whatever
+   * bounds an ANCESTOR fan-out call propagated. A child therefore sees the
+   * caller's `maxDepth`/`maxTotalAgents` for its own recursive
+   * `subtask_parallel`, not just the deployment ceiling.
+   */
+  private flowBounds(agent: Agent): FanOutBounds {
+    const flow = this.flow(agent)
+    return {
+      ...this.config.fanOut,
+      ...flow.maxDepth === undefined ? {} : { maxDepth: flow.maxDepth },
+      ...flow.maxTotalAgents === undefined ? {} : { maxTotalAgents: flow.maxTotalAgents },
+    }
   }
 
   /**
@@ -163,9 +231,23 @@ export class OrchestratorRuntime {
    */
   previewFanOut(agent: Agent, request: FanOutRequest): FanOutPlan {
     return planFanOut(
-      { bounds: this.config.fanOut, depth: delegationDepthOf(agent), spent: this.spent(agent) },
+      { bounds: this.flowBounds(agent), depth: delegationDepthOf(agent), spent: this.flow(agent).spent },
       request,
     )
+  }
+
+  /**
+   * Charge one dispatched plan to the calling flow and PROPAGATE its effective
+   * bounds so the children's own fan-outs are gated by the tighter call bounds
+   * (design §5.5 recursive fan-out).
+   */
+  private accountPlan(agent: Agent, plan: Extract<FanOutPlan, { kind: 'fan-out' }>): void {
+    const flow = this.flow(agent)
+    flow.spent += plan.tasks.length
+    flow.maxDepth = flow.maxDepth === undefined ? plan.maxDepth : Math.min(flow.maxDepth, plan.maxDepth)
+    flow.maxTotalAgents = flow.maxTotalAgents === undefined
+      ? plan.maxTotalAgents
+      : Math.min(flow.maxTotalAgents, plan.maxTotalAgents)
   }
 
   /**
@@ -175,13 +257,21 @@ export class OrchestratorRuntime {
    */
   async runSubtasks(
     agent: Agent,
-    tasks: Extract<FanOutPlan, { kind: 'fan-out' }>['tasks'],
+    plan: Extract<FanOutPlan, { kind: 'fan-out' }>,
     signal: AbortSignal,
   ): Promise<SubTaskResult[]> {
     const dispatcher = this.dispatcherFor(agent)
-    this.account(agent, tasks.length)
-    return await Promise.all(tasks.map(async (task, taskIndex): Promise<SubTaskResult> => {
-      const value = await dispatchOne(dispatcher, task.role, task.tier, task.brief, `subtask-${taskIndex + 1}`, signal)
+    this.accountPlan(agent, plan)
+    return await Promise.all(plan.tasks.map(async (task, taskIndex): Promise<SubTaskResult> => {
+      const value = await dispatchOne(
+        dispatcher,
+        task.role,
+        task.tier,
+        task.brief,
+        `subtask-${taskIndex + 1}`,
+        signal,
+        task.toolFilter,
+      )
       return { taskIndex, value }
     }))
   }
@@ -193,6 +283,31 @@ export class OrchestratorRuntime {
       throw new Error(`review loop ${loop.id}: its review-work subagent "${loop.carrierId}" is no longer live`)
     }
     return carrier
+  }
+
+  /**
+   * Resolve one agent's loop for the FILTER path: the carrier may act, and so
+   * may the delegating lead (§5.7 puts false-positive filtering on the lead).
+   * A lead driving several loops must name one; an unrelated agent is refused.
+   */
+  private loopForFilter(agent: Agent, loopId: string | undefined): ReviewLoop {
+    if (loopId !== undefined) {
+      const loop = [...this.loops.values()].find(candidate => candidate.id === loopId)
+      if (loop !== undefined && (String(loop.carrierId) === String(agent.id) || String(loop.leadId) === String(agent.id))) {
+        return loop
+      }
+      throw new Error(`review loop ${loopId} does not belong to agent "${agent.id}"`)
+    }
+    const carried = this.loops.get(agent.id)
+    if (carried !== undefined) return carried
+    const led = [...this.loops.values()].filter(loop => String(loop.leadId) === String(agent.id))
+    if (led.length === 1) return led[0]!
+    if (led.length > 1) {
+      throw new Error(`agent "${agent.id}" leads ${led.length} review loops: pass loopId to filter a specific one`)
+    }
+    throw new Error(
+      `agent "${agent.id}" is not carrying or leading a review loop: only the review-work subagent or its delegating session may filter`,
+    )
   }
 
   /** The loop one agent carries (`review_*` tools are carrier-scoped by authority). */
@@ -247,6 +362,7 @@ export class OrchestratorRuntime {
       tier: 'good',
       prompt,
       label: `review loop: ${objective.slice(0, 80)}`,
+      toolFilter: [...WORKER_INHERITED_TOOLS, ...REVIEW_CARRIER_TOOLS],
       tiers: this.config.workerSpawn.tiers,
       provider: this.config.workerSpawn.provider,
       signal,
@@ -264,9 +380,9 @@ export class OrchestratorRuntime {
       try {
         interruptWorker(this.ctx, agent, started.childId)
       } catch (interruptError: unknown) {
-        this.ctx.logger.warn('dsh-orchestrator: could not park carrier %s: %s', started.childId, describe(interruptError))
+        this.ctx.logger.warn('dsh-orchestrator: could not park carrier %s: %s', started.childId, describeError(interruptError))
       }
-      throw new Error(`could not create the review goal on "${started.childId}": ${describe(error)}`)
+      throw new Error(`could not create the review goal on "${started.childId}": ${describeError(error)}`)
     }
     const loop = new ReviewLoop({
       loopId: `loop-${started.childId}`,
@@ -289,7 +405,7 @@ export class OrchestratorRuntime {
    * count, and a human instruction outranks the deployment default) → the
    * configured `reviewersPerRound`.
    */
-  private reviewerCount(carrier: Agent, requested: number | undefined): number {
+  private reviewerCount(loop: ReviewLoop, requested: number | undefined): number {
     if (requested !== undefined) {
       if (!Number.isSafeInteger(requested) || requested < 1) {
         throw new Error(`review_round reviewers must be a positive whole number, got ${String(requested)}`)
@@ -299,7 +415,9 @@ export class OrchestratorRuntime {
     const gate = this.ctx.get('reviewGate') as
       | { stateOf?: (session: unknown) => { reviewers?: number } | undefined }
       | undefined
-    const flagged = gate?.stateOf?.(carrier.session)?.reviewers
+    // `--workers N` is recorded on the session that SENT the user input (the
+    // delegating lead), not on the disposable carrier the loop spawned.
+    const flagged = gate?.stateOf?.(this.ctx.agents.get(loop.leadId)?.session)?.reviewers
     if (flagged !== undefined && Number.isSafeInteger(flagged) && flagged > 0) return flagged
     return this.config.reviewersPerRound
   }
@@ -326,7 +444,7 @@ export class OrchestratorRuntime {
     const loop = this.requireLoop(agent)
     const plan = request.plan.trim()
     if (plan === '') throw new Error('review_round needs the plan text under review')
-    const reviewers = this.reviewerCount(agent, request.reviewers)
+    const reviewers = this.reviewerCount(loop, request.reviewers)
     const files = [...(request.files ?? [])]
     const round = loop.nextRound()
     const dispatcher = this.dispatcherFor(agent)
@@ -343,26 +461,67 @@ export class OrchestratorRuntime {
       return { taskIndex: index, value }
     }))
     const record = loop.recordRound({ round, dispatched: reviewers, outcomes: outcomes.map(result => result.value) })
+    this.syncTaskBoard(loop)
     return { record, loop: loop.snapshot(), results: outcomes }
+  }
+
+  /**
+   * Mirror the loop's review state onto the delegating session's task board:
+   * each round's `reviewRound` and cross-round findings union, the filtered
+   * false positives, and (when requested) a status. The board is optional and
+   * reached structurally; a board failure must never break the review.
+   */
+  private syncTaskBoard(loop: ReviewLoop, status?: 'awaiting_approval' | 'completed'): void {
+    const lead = this.ctx.agents.get(loop.leadId)
+    const board = this.ctx.get('taskBoard') as Partial<TaskBoardSyncProbe> | undefined
+    if (lead === undefined || board?.list === undefined || board.update === undefined) return
+    try {
+      const rows = board.list(lead.session)
+      // The loop's board row is created on demand: a requirement-level task
+      // must exist for the cross-round union to accumulate on, and a cached
+      // id is reused until the lead closes it.
+      const cachedId = this.boardTasks.get(loop.id)
+      let task = cachedId === undefined ? undefined : rows.find(row => row.id === cachedId && TERMINAL_TASK_STATUS[row.status] !== true)
+      task ??= [...rows].reverse().find(row => TERMINAL_TASK_STATUS[row.status] !== true)
+      if (task === undefined) {
+        if (board.create === undefined) return
+        task = board.create(lead.session, { subject: loop.objective, owner: loop.leadId })
+      }
+      this.boardTasks.set(loop.id, task.id)
+      const snapshot = loop.snapshot()
+      const findings = snapshot.findings.map(row => ({ severity: row.severity, summary: row.summary, sourceRound: row.sourceRound }))
+      const filtered = snapshot.filtered.map(row => ({ severity: row.severity, summary: row.summary, sourceRound: row.sourceRound }))
+      board.update(lead.session, task.id, {
+        reviewRound: snapshot.round,
+        findings,
+        filteredFindings: filtered,
+        ...status === undefined ? {} : { status },
+      }, task.revision)
+    } catch (error: unknown) {
+      this.ctx.logger.warn('dsh-orchestrator: could not write loop %s to the task board: %s', loop.id, describeError(error))
+    }
   }
 
   /**
    * Remove findings from the accepted union — the false positives the lead
    * disproved and the ones the revised plan now answers (the lead's own
    * judgment, not a model's grade). Removed findings stop counting and are
-   * retained with their reason.
+   * retained with their reason. Callable by the carrier AND by the delegating
+   * lead (§5.7), so the business filter is not stuck in the review child.
    */
   filter(
     agent: Agent,
     reject: readonly RejectionRequest[],
+    loopId?: string,
   ): {
     readonly loop: LoopSnapshot
     readonly removed: readonly FilteredFinding[]
     readonly unmatched: readonly RejectionRequest[]
   } {
-    const loop = this.requireLoop(agent)
+    const loop = this.loopForFilter(agent, loopId)
     if (reject.length === 0) throw new Error('review_filter needs at least one finding to remove')
     const { removed, unmatched } = loop.filterFindings(reject)
+    this.syncTaskBoard(loop)
     return { loop: loop.snapshot(), removed, unmatched }
   }
 
@@ -375,6 +534,7 @@ export class OrchestratorRuntime {
   finish(agent: Agent): { readonly loop: LoopSnapshot; readonly verdict: ReviewTally } {
     const loop = this.requireLoop(agent)
     const verdict = loop.clear()
+    this.syncTaskBoard(loop)
     return { loop: loop.snapshot(), verdict }
   }
 
@@ -389,6 +549,7 @@ export class OrchestratorRuntime {
     const verdict = loop.assertCompletable()
     const goal = this.ctx.goals.complete(carrier, this.goalRef(carrier))
     loop.markComplete()
+    this.syncTaskBoard(loop, 'completed')
     const reported = await this.report(loop, carrier, verdict, summary, signal ?? new AbortController().signal)
     return { loop: loop.snapshot(), goal: { id: goal.id, phase: goal.phase }, reported }
   }
@@ -416,19 +577,37 @@ export class OrchestratorRuntime {
       await sendWorkerMessage(this.ctx, carrier, loop.leadId, [{ type: 'text', text }], signal)
       return true
     } catch (error: unknown) {
-      this.ctx.logger.warn('dsh-orchestrator: could not report loop %s to %s: %s', loop.id, loop.leadId, describe(error))
+      this.ctx.logger.warn('dsh-orchestrator: could not report loop %s to %s: %s', loop.id, loop.leadId, describeError(error))
       return false
     }
   }
 
-  /** Enter the human-decision wait (exit B). The carrier's parent relays the answer. */
-  block(agent: Agent, reason: GoalBlockReason): LoopExitResult {
+  /**
+   * Enter the human-decision wait (exit B) and relay the reason to the
+   * delegating session (the carrier's parent), which asks the human and sends
+   * the answer back. The relay is never fatal to the block itself.
+   */
+  async block(agent: Agent, reason: GoalBlockReason, signal?: AbortSignal): Promise<LoopExitResult> {
     const loop = this.requireLoop(agent)
     const carrier = this.requireCarrier(loop)
     loop.assertBlockable()
     const goal = this.ctx.goals.block(carrier, this.goalRef(carrier), reason)
     loop.markBlocked({ code: reason.code, message: reason.message })
-    return { loop: loop.snapshot(), goal: { id: goal.id, phase: goal.phase }, reported: false }
+    this.syncTaskBoard(loop, 'awaiting_approval')
+    let reported = false
+    try {
+      await sendWorkerMessage(
+        this.ctx,
+        carrier,
+        loop.leadId,
+        [{ type: 'text', text: renderBlockNotice({ loopId: loop.id, objective: loop.objective, reason, carrierId: String(loop.carrierId) }) }],
+        signal ?? new AbortController().signal,
+      )
+      reported = true
+    } catch (error: unknown) {
+      this.ctx.logger.warn('dsh-orchestrator: could not relay the block of loop %s to %s: %s', loop.id, loop.leadId, describeError(error))
+    }
+    return { loop: loop.snapshot(), goal: { id: goal.id, phase: goal.phase }, reported }
   }
 
   /** Resume a blocked loop once the human answer arrived. */
@@ -439,11 +618,6 @@ export class OrchestratorRuntime {
     const goal = this.ctx.goals.resume(carrier, this.goalRef(carrier))
     loop.markResumed()
     return { loop: loop.snapshot(), goal: { id: goal.id, phase: goal.phase }, reported: false }
-  }
-
-  /** The loops this plugin knows about too (currently live only). */
-  loopSnapshot(carrierId: SessionId): LoopSnapshot | undefined {
-    return this.loops.get(carrierId)?.snapshot()
   }
 
   /** How many review loops are registered. */
@@ -483,6 +657,7 @@ export class OrchestratorRuntime {
     for (const dispatcher of dispatchers) dispatcher.dispose()
     this.loops.clear()
     this.budgets.clear()
+    this.boardTasks.clear()
   }
 }
 
@@ -497,15 +672,12 @@ async function dispatchOne(
   brief: string,
   label: string,
   signal: AbortSignal,
+  toolFilter?: readonly string[],
 ): Promise<SubTaskOutcome> {
   try {
-    return await dispatcher.dispatch({ role, tier, brief, label }, signal)
+    return await dispatcher.dispatch({ role, tier, brief, label, ...toolFilter === undefined ? {} : { toolFilter } }, signal)
   } catch (error: unknown) {
-    return { role, status: signal.aborted ? 'aborted' : 'error', error: describe(error) }
+    return { role, status: signal.aborted ? 'aborted' : 'error', error: describeError(error) }
   }
 }
 
-/** Render one thrown value for a result or a log line. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}

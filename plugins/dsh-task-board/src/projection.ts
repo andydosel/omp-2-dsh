@@ -78,11 +78,6 @@ export function isWorkSetMember(task: TaskSnapshot): boolean {
   return task.inContext && !isTerminalStatus(task.status)
 }
 
-/** Work set members: the tasks whose subjects the prompt section renders. */
-export function workSetTasks(state: TaskBoardState): readonly TaskSnapshot[] {
-  return state.filter(isWorkSetMember)
-}
-
 /** One task by id, tombstones included (so `task_reopen`/CAS find closed tasks). */
 export function findTask(state: TaskBoardState, id: TaskId): TaskSnapshot | undefined {
   return state.find(task => task.id === id)

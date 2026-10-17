@@ -1,6 +1,6 @@
-# 需求分析:随行协调者套件 + dsh 0.2.0-rc.2 迁移
+# 需求分析:随行协调者套件 + dsh 0.2.1-rc.2 迁移
 
-> 范围:本次实现(dsh 0.1.1-rc.2 → 0.2.0-rc.2 迁移 + 随行协调者套件 6 插件)。
+> 范围:本次实现(dsh 0.1.1-rc.2 → 0.2.1-rc.2 迁移 + 随行协调者套件 6 插件)。
 > **不是**整个 omp-2-dsh 仓库的完整需求(仓库还含 omp 能力迁移等其它内容)。
 > 对应实现设计见 `DESIGN-COORDINATOR-SUITE.md`。
 
@@ -22,9 +22,9 @@
 | 8 | agent 看不到自己哪些任务没完成,也不能自动闭环/手动关掉 | 任务板工作集注入上下文 + 自动/手动闭环 |
 | 9 | 任务可拆成多个独立点,但 agent 只会拆、不会拆完就并发执行 | 递归 fan-out + 并行执行(显式工具 + 可配闸) |
 
-## 2. 迁移需求:dsh 0.1.1-rc.2 → 0.2.0-rc.2
+## 2. 迁移需求:dsh 0.1.1-rc.2 → 0.2.1-rc.2
 
-现有 7 插件 pin `@deepseek-ai/dsh-*@0.1.1-rc.2`;最新为 `0.2.0-rc.2`(无 stable),落后 9 个版本、跨代升级。必须**一次性整体迁移**(dsh 包间等价 peer,混版本会双实例)。
+现有 7 插件 pin `@deepseek-ai/dsh-*@0.1.1-rc.2`;目标为 `0.2.1-rc.2`(依赖范围仅 `^0.2.1-rc.2`,不再支持 0.2.0-rc.2;无 stable),落后 9 个版本、跨代升级。必须**一次性整体迁移**(dsh 包间等价 peer,混版本会双实例)。0.2.1 的关键替换:`startContinuable` → `startActivation`(`SubagentActivationSpec`)。
 
 **破坏性变更速查(14 组 + 4 改名,~70 调用点,6/7 插件):**
 
@@ -39,7 +39,7 @@
 | W 客户端 | `dsh-client-runtime` 整包删除;`settingsScope`→`configForms`;`sessions.open`→`retain` | mode-ui/vibe(删) |
 | S8/M5 迁包改名 | `JsonValue`/`deepFreeze` 迁 `dsh-util-values`;`CallId`→`ToolCallId` | compact/read-write/advisor |
 
-**不受影响(已核实)**:`ctx.fs`/`ctx.tools`(register/restrict/presentAs)/`ctx.systemPrompt.section`/`ctx.commands`/`ctx.agents`/`ctx.sandbox`/`Agent.followup·steer·inject`/`ctx.goals`/`startContinuable`/session-projection 契约 —— 签名逐字节未变,新套件核心机制不受拖累。
+**不受影响(已核实)**:`ctx.fs`/`ctx.tools`(register/restrict/presentAs)/`ctx.systemPrompt.section`/`ctx.commands`/`ctx.agents`/`ctx.sandbox`/`Agent.followup·steer·inject`/`ctx.goals`/session-projection 契约 —— 签名逐字节未变,新套件核心机制不受拖累。0.2.1 的 `startContinuable` → `startActivation` 改名见 §2。
 
 ## 3. 新套件需求:6 插件 + 1 延后
 
@@ -50,7 +50,7 @@
 | `dsh-task-board` | 需求级任务板 + 工作集/注意力 + 闭环/重开 | session-projection + `systemPrompt.section` |
 | `dsh-review-gate` | `--review` 写路径闸 | `tools/pre-execute` → `ctx.approval`/`ctx.userQuestions` |
 | `dsh-question-board` | 异步问题收件箱 | durable 事件 + 节点 |
-| `dsh-orchestrator` | 需求-评审循环 + `subtask_parallel` | `ctx.goals` + `startContinuable` + 递归 fan-out |
+| `dsh-orchestrator` | 需求-评审循环 + `subtask_parallel` | `ctx.goals` + `startActivation` + 递归 fan-out |
 | (延后) 模型路由 | vibe `fast/good` 两档扩展 | — |
 
 **关键架构定论(访谈确认):**
@@ -116,4 +116,4 @@ flowchart LR
 ## 相关文档
 
 - 实现设计:`DESIGN-COORDINATOR-SUITE.md`
-- 0.2.0-rc.2 API 对齐、模块实现规格:见设计文档 §12/§13。
+- 0.2.1-rc.2 API 对齐、模块实现规格:见设计文档 §12/§13。

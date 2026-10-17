@@ -10,7 +10,7 @@
  * - **Gate** — `gateRules` become approval gates: one `tools/pre-execute`
  *   listener on this (global) context turns a matching call into
  *   `{ kind: 'ask' }`, which the approval service adjudicates before the body
- *   runs. The same rules are published as `ctx.rules` for review-gate / org.
+ *   runs.
  *
  * ```yaml
  * - insert:
@@ -37,7 +37,7 @@ import { resolveConfig } from './config.ts'
 import type { RulesConfig } from './config.ts'
 import { RulesGate } from './gate.ts'
 
-export { ADVISORY_SECTION, ADVISORY_MAX_BYTES, composeAdvisoryText, loadAdvisorySources, resolveAdvisoryPath } from './advisory.ts'
+export { ADVISORY_SECTION, DEFAULT_ADVISORY_MAX_BYTES, composeAdvisoryText, loadAdvisorySources, resolveAdvisoryPath } from './advisory.ts'
 export type { AdvisoryLoadOptions, AdvisorySource } from './advisory.ts'
 export { Config, DEFAULT_ADVISORY_FILES, resolveConfig } from './config.ts'
 export type { GateRule, ResolvedRulesConfig, RulesConfig } from './config.ts'
@@ -65,6 +65,7 @@ export function apply(ctx: Context, config: RulesConfig): void {
   const resolved = resolveConfig(config)
 
   const sources = loadAdvisorySources(resolved.advisoryFiles, {
+    maxBytes: resolved.advisoryMaxBytes,
     onSkip: (path, reason) => ctx.logger.warn('dsh-rules: skipping advisory source %s: %s', path, reason),
   })
   const advisoryText = composeAdvisoryText(sources)
@@ -77,7 +78,7 @@ export function apply(ctx: Context, config: RulesConfig): void {
     }), 'dsh-rules.advisory-section')
   }
 
-  const gate = new RulesGate(ctx, resolved.gateRules)
+  const gate = new RulesGate(resolved.gateRules)
   if (resolved.gateRules.length > 0) {
     ctx.on('tools/pre-execute', (exec: ToolExecution, next) => {
       const decision = gate.evaluate(exec)

@@ -139,6 +139,9 @@ describe('browser node definition', () => {
       kind: TASK_BOARD_NODE_KIND,
       id: TASK_BOARD_NODE_ID,
       target: 'chat',
+      // Session location keeps the panel out of the completed turn's process
+      // disclosure (ui-chat hides non-independent turn/step nodes there).
+      location: { kind: 'session' },
       visibility: 'visible',
       data: { tasks: [] },
     })

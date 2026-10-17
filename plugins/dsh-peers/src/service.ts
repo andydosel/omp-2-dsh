@@ -21,9 +21,12 @@
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { toSessionId } from '@dsh-plugin/dsh-util/session'
+import { escapeXml } from '@dsh-plugin/dsh-util/xml'
 import { findMessage, foldPeerInbox, hasKey } from './inbox.ts'
 import { registerPeersProjection } from './projection.ts'
 import { definePeerSendTool } from './tool.ts'
@@ -36,6 +39,10 @@ export interface PeersConfig {
   wakeupEnabled?: boolean
   /** Maximum UTF-8 byte length of one message body (default `16384`). */
   maxContentBytes?: number
+  /** Whether a durable ancestor/descendant edge authorizes a send (default `true`). */
+  allowAncestor?: boolean
+  /** Maximum ancestor hops the lineage walk climbs before giving up (default `64`). */
+  ancestorWalkLimit?: number
 }
 
 /** Detached, validated configuration consumed by the service. */
@@ -44,9 +51,26 @@ export interface ResolvedPeersConfig {
   wakeupEnabled: boolean
   /** Effective body-size bound, in UTF-8 bytes. */
   maxContentBytes: number
+  /** Whether lineage edges authorize a send. */
+  allowAncestor: boolean
+  /** Effective ancestor-hop bound of the lineage walk. */
+  ancestorWalkLimit: number
 }
 
-const KNOWN_CONFIG_KEYS: Readonly<Record<string, true>> = { wakeupEnabled: true, maxContentBytes: true }
+const KNOWN_CONFIG_KEYS: Readonly<Record<string, true>> = {
+  wakeupEnabled: true,
+  maxContentBytes: true,
+  allowAncestor: true,
+  ancestorWalkLimit: true,
+}
+
+/** Schema of the peers row configuration (the loader may validate with it). */
+export const Config: z<PeersConfig> = z.object({
+  wakeupEnabled: z.boolean().default(true),
+  maxContentBytes: z.number().step(1).min(1).default(16384),
+  allowAncestor: z.boolean().default(true),
+  ancestorWalkLimit: z.number().step(1).min(1).default(64),
+})
 
 /**
  * Validate raw configuration and return a detached resolved copy.
@@ -57,7 +81,7 @@ const KNOWN_CONFIG_KEYS: Readonly<Record<string, true>> = { wakeupEnabled: true,
 export function resolvePeersConfig(config: PeersConfig = {}): ResolvedPeersConfig {
   for (const key of Object.keys(config)) {
     if (KNOWN_CONFIG_KEYS[key] === undefined) {
-      throw new Error(`dsh-peers: unknown config key "${key}" (known: wakeupEnabled, maxContentBytes)`)
+      throw new Error(`dsh-peers: unknown config key "${key}" (known: wakeupEnabled, maxContentBytes, allowAncestor, ancestorWalkLimit)`)
     }
   }
   const wakeupEnabled = config.wakeupEnabled ?? true
@@ -68,7 +92,15 @@ export function resolvePeersConfig(config: PeersConfig = {}): ResolvedPeersConfi
   if (!Number.isInteger(maxContentBytes) || maxContentBytes <= 0) {
     throw new Error(`dsh-peers: maxContentBytes must be a positive integer (got ${JSON.stringify(config.maxContentBytes)})`)
   }
-  return { wakeupEnabled, maxContentBytes }
+  const allowAncestor = config.allowAncestor ?? true
+  if (typeof allowAncestor !== 'boolean') {
+    throw new Error(`dsh-peers: allowAncestor must be a boolean (got ${JSON.stringify(config.allowAncestor)})`)
+  }
+  const ancestorWalkLimit = config.ancestorWalkLimit ?? 64
+  if (!Number.isInteger(ancestorWalkLimit) || ancestorWalkLimit <= 0) {
+    throw new Error(`dsh-peers: ancestorWalkLimit must be a positive integer (got ${JSON.stringify(config.ancestorWalkLimit)})`)
+  }
+  return { wakeupEnabled, maxContentBytes, allowAncestor, ancestorWalkLimit }
 }
 
 /** Failure codes of a rejected peer send. */
@@ -90,14 +122,9 @@ export class PeerSendError extends Error {
   }
 }
 
-/** Escape one XML text/value character (the delivery card is XML). */
-function escapeXml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
+/** Compare two optional session ids by their wire value. */
+function sameId(left: SessionId | string | undefined, right: SessionId | string | undefined): boolean {
+  return left !== undefined && right !== undefined && String(left) === String(right)
 }
 
 /**
@@ -146,14 +173,25 @@ export function deliveryMessage(snapshot: PeerMessageSnapshot): UserMessage {
 export class PeersService extends Service {
   static inject = ['agents', 'sessions'] as const
 
+  static Config = Config
+
   /** The validated configuration. */
   readonly config: ResolvedPeersConfig
 
-  /** Per-target inboxes, seeded lazily from the target's durable log. */
-  readonly #inboxes = new Map<string, PeerMessageSnapshot[]>()
+  /**
+   * Per-target inboxes, seeded lazily from the target's durable log.
+   *
+   * Plain TypeScript-private fields, deliberately NOT ECMAScript `#` private
+   * fields: `ctx.get('peers')` returns a Cordis Proxy, and a `#field` read on
+   * that Proxy throws (the Proxy is not an instance of the declaring class).
+   * `dsh-org` reaches this service through exactly that Proxy to deliver
+   * `assign_task` briefs, so every field this service touches must be
+   * proxy-safe.
+   */
+  private readonly inboxes = new Map<string, PeerMessageSnapshot[]>()
 
   /** Monotonic counter for minted message ids (uniqueness is per process). */
-  #messageCounter = 0
+  private messageCounter = 0
 
   /**
    * @param ctx - the plugin context (`agents` and `sessions` are injected).
@@ -181,8 +219,8 @@ export class PeersService extends Service {
    *   oversized body, an invalid delivery mode, or a forbidden sender.
    */
   async send(sender: Agent, input: PeersSendInput): Promise<PeersSendResult> {
-    const targetId = SessionId(String(input.targetId))
-    const targetSession = this.ctx.get('sessions')?.get(targetId) ?? this.ctx.get('agents')?.get(targetId)?.session
+    const targetId = toSessionId(input.targetId)
+    const targetSession = this.ctx.sessions.get(targetId) ?? this.ctx.agents.get(targetId)?.session
     if (targetSession === undefined) {
       throw new PeerSendError(`peer_send: no live session or agent with id "${String(targetId)}"`, 'NO_TARGET')
     }
@@ -203,16 +241,25 @@ export class PeersService extends Service {
     if (delivery !== 'quiet' && delivery !== 'wakeup') {
       throw new PeerSendError(`peer_send: delivery must be quiet|wakeup (got ${JSON.stringify(input.delivery)})`, 'BAD_DELIVERY')
     }
-    // A negative grant from the optional org service is authoritative.
+    // A negative grant from the optional org service is authoritative; without
+    // one, only a durable lineage or manager edge authorizes a non-coordinator.
     const org = this.ctx.get('org') as OrgForbiddenProbe | undefined
-    if (org?.isForbidden(sender.id, targetId) === true) {
+    if (org?.isForbidden?.(sender.id, targetId) === true) {
       throw new PeerSendError(
         `peer_send: ${String(sender.id)} is forbidden from addressing ${String(targetId)}`,
         'FORBIDDEN',
       )
     }
+    if (!this.mayAddress(sender, targetId, org)) {
+      throw new PeerSendError(
+        `peer_send: ${String(sender.id)} is not authorized to address ${String(targetId)}. `
+        + 'A non-coordinator may address only its manager, a session it manages, or a durable ancestor/descendant; '
+        + 'a coordinator (secretary) may address any session it has not forbidden.',
+        'FORBIDDEN',
+      )
+    }
 
-    const messageId = input.messageId ?? this.#mintMessageId()
+    const messageId = input.messageId ?? this.mintMessageId()
     const key = dedupeKey(sender.id, messageId)
     const existing = findMessage(this.inboxFor(targetId), key)
     if (existing !== undefined) {
@@ -231,7 +278,7 @@ export class PeersService extends Service {
     const logged = targetSession.append('peer/message', snapshot)
     this.record(logged)
 
-    const agent = this.ctx.get('agents')?.get(targetId)
+    const agent = this.ctx.agents.get(targetId)
     const woke = delivery === 'wakeup' && this.config.wakeupEnabled && agent !== undefined
     if (woke) agent?.followup(deliveryMessage(logged.data))
     return { status: 'delivered', message: logged.data, woke }
@@ -254,7 +301,7 @@ export class PeersService extends Service {
    * @returns true when the dedupe key is present.
    */
   has(senderId: SessionId | string, messageId: string, targetId: SessionId | string): boolean {
-    return hasKey(this.inboxFor(targetId), dedupeKey(SessionId(String(senderId)), messageId))
+    return hasKey(this.inboxFor(targetId), dedupeKey(toSessionId(senderId), messageId))
   }
 
   /**
@@ -275,11 +322,11 @@ export class PeersService extends Service {
    */
   private inboxFor(targetId: SessionId | string): PeerMessageSnapshot[] {
     const key = String(targetId)
-    const existing = this.#inboxes.get(key)
+    const existing = this.inboxes.get(key)
     if (existing !== undefined) return existing
-    const session = this.ctx.get('sessions')?.get(SessionId(key))
+    const session = this.ctx.sessions.get(toSessionId(key))
     const seeded = session === undefined ? [] : foldPeerInbox(session.snapshotEvents())
-    this.#inboxes.set(key, seeded)
+    this.inboxes.set(key, seeded)
     return seeded
   }
 
@@ -289,12 +336,48 @@ export class PeersService extends Service {
     const snapshot = event.data
     const inbox = this.inboxFor(snapshot.targetId)
     if (hasKey(inbox, snapshot.id)) return
-    this.#inboxes.set(String(snapshot.targetId), [...inbox, snapshot])
+    this.inboxes.set(String(snapshot.targetId), [...inbox, snapshot])
+  }
+
+  /**
+   * Whether one live sender may address one live target (§5.6 authorization):
+   * a coordinator may address anyone (the forbidden set already blocked the
+   * negative grants); everyone else may address only its manager, a session it
+   * manages, or a durable ancestor/descendant.
+   */
+  private mayAddress(
+    sender: Agent,
+    targetId: SessionId,
+    org: OrgForbiddenProbe | undefined,
+  ): boolean {
+    if (org?.roleOf?.(sender.id) === 'secretary') return true
+    if (this.config.allowAncestor && (this.isAncestor(sender.id, targetId) || this.isAncestor(targetId, sender.id))) {
+      return true
+    }
+    if (org === undefined) return false
+    if (sameId(org.managerOf?.(sender.id), targetId)) return true
+    if (org.managesOf?.(sender.id)?.some(id => sameId(id, targetId)) === true) return true
+    if (sameId(org.managerOf?.(targetId), sender.id)) return true
+    // Target is itself a coordinator: coordinator-to-coordinator traffic.
+    return org.roleOf?.(targetId) === 'secretary'
+  }
+
+  /** Whether `ancestorId` is a durable ancestor of `descendantId`. */
+  private isAncestor(ancestorId: SessionId, descendantId: SessionId): boolean {
+    let current = this.ctx.sessions.get(descendantId) ?? this.ctx.agents.get(descendantId)?.session
+    for (let hops = 0; hops < this.config.ancestorWalkLimit; hops += 1) {
+      if (current === undefined) return false
+      const parent = current.header.parentSession
+      if (parent === undefined) return false
+      if (sameId(parent, ancestorId)) return true
+      current = this.ctx.sessions.get(parent) ?? this.ctx.agents.get(parent)?.session
+    }
+    return false
   }
 
   /** Mint a sender-scoped message id (`msg-<monotonic>-<random>`). */
-  #mintMessageId(): string {
-    this.#messageCounter += 1
-    return `msg-${this.#messageCounter}-${Math.random().toString(36).slice(2, 10)}`
+  private mintMessageId(): string {
+    this.messageCounter += 1
+    return `msg-${this.messageCounter}-${Math.random().toString(36).slice(2, 10)}`
   }
 }

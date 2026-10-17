@@ -3,7 +3,7 @@
  * over the read/write path arguments of the file tools, installed as one
  * `tools/pre-execute` listener per role agent (see `envelope.ts`).
  *
- * Mapping (VERIFY-PATH-RESTRICT.md §3c):
+ * Mapping:
  * - `read` / `read_image` / `lsp` → `file_path` → readPaths
  * - `glob` / `grep` → `path ?? workspace root` → readPaths (an ABSENT path is
  *   the session workspace root, which is routinely outside a secretary's read
@@ -15,8 +15,8 @@
  *
  * Fail-closed: a missing, non-string, or empty path argument denies.
  *
- * HONEST LIMITS (see VERIFY doc §4b/§4c): matching is TEXTUAL after
- * `path.resolve` + `path.normalize` only — symlinks, junctions, 8.3 short
+ * HONEST LIMITS: matching is TEXTUAL after `path.resolve` +
+ * `path.normalize` only — symlinks, junctions, 8.3 short
  * names, UNC aliases, and `..` tricks that survive normalization are not
  * resolved against the real filesystem, so this is a strong envelope, not a
  * kernel boundary. `bash` has no path parameter and is NOT path-gated; the
@@ -27,6 +27,10 @@
  */
 
 import path from 'node:path'
+import { globToRegExp } from '@dsh-plugin/dsh-util/glob'
+
+/** Windows paths are case-insensitive; POSIX ones are not. */
+const CASE_INSENSITIVE = process.platform === 'win32'
 
 /** The decision the path gate returns (a subset of `PreToolDecision`). */
 export type PathGateDecision = { kind: 'allow' } | { kind: 'deny'; reason: string }
@@ -55,11 +59,6 @@ export interface PathGateInput {
   readPaths: readonly string[]
   /** Write whitelist globs, relative to `cwd` unless absolute. */
   writePaths: readonly string[]
-}
-
-/** Escape one character for a regular expression. */
-function escapeRegExp(char: string): string {
-  return char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /**
@@ -104,40 +103,6 @@ export function normalizePattern(pattern: string, cwd: string): string {
   return normalizeCandidate(trimmed, cwd)
 }
 
-/** Compiled glob cache: one RegExp per pattern (`glob → regex once`). */
-const REGEX_CACHE = new Map<string, RegExp>()
-
-/** Compile one normalized glob to an anchored RegExp (`**`, `*`, `?` supported). */
-function compileGlob(glob: string): RegExp {
-  const key = process.platform === 'win32' ? glob.toLowerCase() : glob
-  const cached = REGEX_CACHE.get(key)
-  if (cached !== undefined) return cached
-  let source = ''
-  for (let index = 0; index < key.length; index++) {
-    const char = key[index] ?? ''
-    if (char === '*') {
-      if (key[index + 1] === '*') {
-        index++
-        if (key[index + 1] === '/') {
-          index++
-          source += '(?:.*/)?'
-        } else {
-          source += '.*'
-        }
-      } else {
-        source += '[^/]*'
-      }
-    } else if (char === '?') {
-      source += '[^/]'
-    } else {
-      source += escapeRegExp(char)
-    }
-  }
-  const regex = new RegExp(`^${source}$`)
-  REGEX_CACHE.set(key, regex)
-  return regex
-}
-
 /**
  * Whether a normalized candidate path matches any normalized whitelist glob.
  * @param normalized - a {@link normalizeCandidate} result.
@@ -145,7 +110,7 @@ function compileGlob(glob: string): RegExp {
  * @returns true when at least one glob matches.
  */
 export function matchesAnyPath(normalized: string, patterns: readonly string[]): boolean {
-  return patterns.some(pattern => compileGlob(pattern).test(normalized))
+  return patterns.some(pattern => globToRegExp(pattern, { caseInsensitive: CASE_INSENSITIVE }).test(normalized))
 }
 
 /** Read one field off a parsed-arguments record, if the value is a string. */

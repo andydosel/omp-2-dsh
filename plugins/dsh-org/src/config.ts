@@ -7,14 +7,16 @@
  *   area) and writes ONLY the handoff area, so its "no source-code" boundary is
  *   a capability envelope, not a promise;
  * - `secretaryBash` defaults to `false`. The path gate cannot police bash
- *   (VERIFY-PATH-RESTRICT.md §4c: bash is an unmanaged read surface), so
- *   keeping bash out of the secretary toolset is what makes "cannot read code"
+ *   (bash is an unmanaged read surface), so keeping bash out of the secretary
+ *   toolset is what makes "cannot read code"
  *   mechanism-enforced. Turning it on downgrades that boundary to
  *   best-effort and the module comment says so;
  * - the lead reads everything and writes documents/handoff.
  *
  * @module @dsh-plugin/dsh-org/config
  */
+
+import z from '@deepseek-ai/schemastery'
 
 /** Raw (user-written) configuration. Every field optional. */
 export interface OrgConfig {
@@ -31,7 +33,7 @@ export interface OrgConfig {
   /** Write whitelist handed to the lead envelope (default docs + handoff). */
   leadWritePaths?: string[]
   /** Whether `org_claim` asks for approval before taking over a session (default `false`). */
-  strictTakeover?: boolean
+  strictMode?: boolean
 }
 
 /** Detached, validated configuration consumed by the envelopes and tools. */
@@ -42,7 +44,7 @@ export interface ResolvedOrgConfig {
   readonly secretaryBash: boolean
   readonly leadReadPaths: readonly string[]
   readonly leadWritePaths: readonly string[]
-  readonly strictTakeover: boolean
+  readonly strictMode: boolean
 }
 
 /** The complete set of accepted configuration keys (unknown keys fail loud). */
@@ -53,8 +55,25 @@ export const KNOWN_CONFIG_KEYS: Record<keyof OrgConfig, true> = {
   secretaryBash: true,
   leadReadPaths: true,
   leadWritePaths: true,
-  strictTakeover: true,
+  strictMode: true,
 }
+
+/**
+ * Schema of the org row configuration. Dependent defaults (the path lists
+ * derive from `handoffDir`) are materialized by {@link resolveOrgConfig}, so
+ * the schema carries the accepted shape and the loader-level validation.
+ */
+export const Config: z<OrgConfig> = z.object({
+  handoffDir: z.string().default('.dsh-handoff'),
+  secretaryReadPaths: z.array(z.string()),
+  secretaryWritePaths: z.array(z.string()),
+  secretaryBash: z.boolean().default(false),
+  leadReadPaths: z.array(z.string()),
+  leadWritePaths: z.array(z.string()),
+  strictMode: z.boolean().default(false),
+  // `z.object` is non-strict by default; the resolver's own key check is what
+  // makes a typo fail at load instead of being silently merged in.
+})
 
 /** The accepted configuration key names, for error messages. */
 export const ORG_CONFIG_KEYS: readonly string[] = Object.keys(KNOWN_CONFIG_KEYS)
@@ -106,22 +125,27 @@ export function resolveOrgConfig(config: OrgConfig = {}): ResolvedOrgConfig {
   if (config.secretaryBash !== undefined && typeof config.secretaryBash !== 'boolean') {
     throw new Error(`dsh-org: config.secretaryBash must be a boolean, got ${JSON.stringify(config.secretaryBash)}`)
   }
-  if (config.strictTakeover !== undefined && typeof config.strictTakeover !== 'boolean') {
-    throw new Error(`dsh-org: config.strictTakeover must be a boolean, got ${JSON.stringify(config.strictTakeover)}`)
+  if (config.strictMode !== undefined && typeof config.strictMode !== 'boolean') {
+    throw new Error(`dsh-org: config.strictMode must be a boolean, got ${JSON.stringify(config.strictMode)}`)
   }
   return {
     handoffDir,
-    secretaryReadPaths: config.secretaryReadPaths === undefined
+    // Schemastery materializes an absent array as `[]`, so an empty list means
+    // "no override" here — the handoff-dependent default is the only sane
+    // reading before the resolver has seen `handoffDir`.
+    secretaryReadPaths: config.secretaryReadPaths === undefined || config.secretaryReadPaths.length === 0
       ? defaultSecretaryReadPaths(handoffDir)
       : requirePathList(config.secretaryReadPaths, 'secretaryReadPaths'),
-    secretaryWritePaths: config.secretaryWritePaths === undefined
+    secretaryWritePaths: config.secretaryWritePaths === undefined || config.secretaryWritePaths.length === 0
       ? defaultSecretaryWritePaths(handoffDir)
       : requirePathList(config.secretaryWritePaths, 'secretaryWritePaths'),
     secretaryBash: config.secretaryBash ?? false,
-    leadReadPaths: config.leadReadPaths === undefined ? ['**'] : requirePathList(config.leadReadPaths, 'leadReadPaths'),
-    leadWritePaths: config.leadWritePaths === undefined
+    leadReadPaths: config.leadReadPaths === undefined || config.leadReadPaths.length === 0
+      ? ['**']
+      : requirePathList(config.leadReadPaths, 'leadReadPaths'),
+    leadWritePaths: config.leadWritePaths === undefined || config.leadWritePaths.length === 0
       ? defaultLeadWritePaths(handoffDir)
       : requirePathList(config.leadWritePaths, 'leadWritePaths'),
-    strictTakeover: config.strictTakeover ?? false,
+    strictMode: config.strictMode ?? false,
   }
 }

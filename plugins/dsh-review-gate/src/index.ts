@@ -2,7 +2,7 @@
  * dsh-review-gate: `--review`, the per-task "plan first, wait for my approval"
  * gate.
  *
- * Design (`DESIGN-COORDINATOR-SUITE-V1.0.md` §5.3 / §13.1):
+ * Design (`DESIGN-COORDINATOR-SUITE.md` §5.3 / §13.1):
  *
  * - The user suffixes their input with `--review` / `--no-review` /
  *   `--workers N`. The flags are stripped at the user-input boundary (the
@@ -49,7 +49,7 @@ import {
   type ReviewGateState,
 } from './state.ts'
 
-export { Config, resolveConfig, DEFAULT_CONFIG, DEFAULT_PROTECTED_PATHS, DEFAULT_SCRATCH_DIR } from './config.ts'
+export { Config, resolveConfig, DEFAULT_PROTECTED_PATHS, DEFAULT_SCRATCH_DIR } from './config.ts'
 export type { DraftSandboxMode, GatePolicy, ResolvedReviewGateConfig, ReviewGateConfig } from './config.ts'
 export { findFlagTarget, parseInputFlags, stripFlags } from './flags.ts'
 export type { FlagTarget, InputFlags } from './flags.ts'
@@ -57,7 +57,7 @@ export { classifyPath, globToRegExp, isWithinDir, relativeToWorkspace } from './
 export type { PathClass, PathClassRequest } from './paths.ts'
 export { createWriteGateListener, evaluateWriteGate, isGateClosed, readToolPath, WRITE_TOOL_NAMES } from './gate.ts'
 export type { GateApprovalPolicy, WriteGateDecision, WriteGateListenerDeps, WriteGateRequest } from './gate.ts'
-export { applyFlagsToState, createReviewGateProjection, initialGateState, reviewGateStateSchema, sameGateState } from './state.ts'
+export { applyFlagsToState, createReviewGateProjection, initialGateState, reviewGateStateSchema } from './state.ts'
 export type { ReviewGateState, ReviewGateView } from './state.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -278,6 +278,7 @@ export class ReviewGateController extends Service {
         if (this.appendState(session, next)) {
           if (isGateClosed(next)) this.tightenSandbox(session)
           else this.restoreSandbox(session)
+          if (flags.review === true) this.markTaskAwaitingApproval(session)
         }
         notices.push(flagNotice(flags, next, this.config))
         this.pendingUnlock.delete(session)
@@ -316,6 +317,20 @@ export class ReviewGateController extends Service {
 
     if (notices.length === 0) return messages === decision.messages ? decision : { ...decision, messages }
     return { ...decision, messages: [...messages, ...notices] }
+  }
+
+  /**
+   * Hand the armed task off to the task board: `--review`/`--plan` means the
+   * requirement is waiting for the human's approval (§5.3/§5.2). The board is
+   * optional and is reached structurally, so the gate stays independent of it.
+   */
+  private markTaskAwaitingApproval(session: Session): void {
+    const board = this.ctx.get('taskBoard') as { markAwaitingApproval?: (session: Session) => unknown } | undefined
+    try {
+      board?.markAwaitingApproval?.(session)
+    } catch (error: unknown) {
+      this.ctx.logger.warn('dsh-review-gate: could not mark the board task awaiting approval: %o', error)
+    }
   }
 
   /** Append one gate state, keeping the plan-less deployment loadable on failure. */

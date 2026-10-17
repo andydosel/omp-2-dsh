@@ -5,9 +5,9 @@
  * carrier relays to its lead.
  *
  * The methodology lives in the initial prompt, not in a prompt section: the
- * carrier is established by `subagents.startContinuable`, whose child
- * composition the continuation manager owns (a caller can supply `agentOptions`,
- * `toolFilter`, and `persona` — not an arbitrary scoped section). Carrying the
+ * carrier is established by `subagents.startActivation`, whose child
+ * composition the activation manager owns (a caller can supply `agentOptions`,
+ * `agentPreset`, and `cwd` — not an arbitrary scoped section). Carrying the
  * procedure as the child's very first user message also keeps it inside the
  * durable transcript this loop is audited from.
  *
@@ -126,6 +126,25 @@ export function renderLoopMethodology(input: {
     '</review_loop>',
   )
   return sections.join('\n')
+}
+
+/**
+ * The exit-B relay the carrier sends to its delegating session: the human
+ * decision it needs, so the lead can ask the user and send the answer back.
+ */
+export function renderBlockNotice(input: {
+  readonly loopId: string
+  readonly objective: string
+  readonly reason: { readonly code: string; readonly message: string }
+  readonly carrierId: string
+}): string {
+  return [
+    '[orchestrator] review loop blocked — human decision needed',
+    `Loop: ${input.loopId} · carrier: ${input.carrierId}`,
+    `Objective: ${input.objective}`,
+    `Reason (${input.reason.code}): ${input.reason.message}`,
+    'Ask the human for a decision (the question board / userQuestions), then relay the answer to this carrier with a message; it will call review_resume.',
+  ].join('\n')
 }
 
 /** The completion report the carrier relays to its lead (and the human sees). */

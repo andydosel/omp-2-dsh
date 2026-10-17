@@ -5,7 +5,7 @@
  * wires by GLOBAL NAME only (never by package import), and the framework-free
  * `OrgApi`/`OrgDeps` seam the tools, envelopes, and commands program against.
  *
- * Design: DESIGN-COORDINATOR-SUITE-V1.0.md §5.1 / §5.6 / §5.9 / §5.10 / §13.6.
+ * Design: DESIGN-COORDINATOR-SUITE.md §5.1 / §5.6 / §5.9 / §5.10 / §13.6.
  *
  * Event semantics (delta events, folded):
  * - `org/claim` / `org/relinquish` are appended to BOTH the acting secretary's
@@ -16,8 +16,11 @@
  *   every other log reads it as "the target is managed by the secretary").
  * - `org/role` names the session it applies to, so it is folded verbatim and
  *   an ABSENT `role` means "role cleared".
- * - `org/forbid` is appended to the acting secretary's log only (the forbidden
- *   set is the secretary's "sessions I must not touch" list).
+ * - `org/forbid` is appended to the acting secretary's log (the forbidden set
+ *   is the secretary's "sessions I must not touch" list); its target-side
+ *   mirror `org/forbidden` is appended to the TARGET's log (live, or its
+ *   stored log when cold) so replaying the target's old `org/claim` can never
+ *   resurrect the forbidden edge.
  * - `org/assign` / `org/notice` are informational for the coarse global state;
  *   their durable home is the acting session's log and the `org` projection.
  *
@@ -26,7 +29,7 @@
 
 import type { ContextFormed, ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { ResolvedOrgConfig } from './config.ts'
 
@@ -129,6 +132,28 @@ export interface ApprovalProbe {
 }
 
 /**
+ * Structural probe for one open durable-log handle (`ctx.sessionPersistence`).
+ * Only the members the cold-target append needs are named; events carry their
+ * own seq/time/data because the handle appends already-built entries.
+ */
+export interface PersistenceHandleProbe {
+  read(offset?: number, length?: number): Promise<{ events: readonly SessionEvent[] }>
+  append(events: readonly SessionEvent[], options?: { signal?: AbortSignal }): Promise<void>
+  flush(): Promise<void>
+  close(): Promise<void>
+}
+
+/**
+ * Structural probe for the session persistence seam. A cold (not-live) target
+ * has no `Session` object to append to, so release/forbid records are written
+ * straight to its stored log through this seam.
+ */
+export interface PersistenceProbe {
+  open(id: SessionId, access: 'write'): Promise<PersistenceHandleProbe>
+  stat?(id: SessionId): Promise<{ eventCount?: number }>
+}
+
+/**
  * The framework-free organisation API the tools, role envelopes, and commands
  * program against. `OrgService` implements it; tests can drive it directly.
  */
@@ -138,9 +163,9 @@ export interface OrgApi {
   forbiddenOf(secretaryId: SessionId | string): SessionId[]
   isForbidden(secretaryId: SessionId | string, targetId: SessionId | string): boolean
   roleOf(sessionId: SessionId | string): OrgRole | undefined
-  claim(secretary: Agent, targetId: string): void
-  relinquish(secretary: Agent, targetId: string): void
-  forbid(secretary: Agent, targetId: string): void
+  claim(secretary: Agent, targetId: string): Promise<void>
+  relinquish(secretary: Agent, targetId: string): Promise<void>
+  forbid(secretary: Agent, targetId: string): Promise<void>
   setRole(sessionId: SessionId, role: OrgRole | undefined): void
   spawnLead(secretary: Agent, input: SpawnLeadInput): Promise<{ sessionId: SessionId }>
   assign(secretary: Agent, input: AssignInput): { taskId?: string }
@@ -167,6 +192,8 @@ export interface OrgDeps {
   approval(): ApprovalProbe | undefined
   /** Filesystem seam, when composed. */
   fs(): FsProbe | undefined
+  /** Durable session-log seam, when composed (cold-target release/forbid records). */
+  sessionPersistence(): PersistenceProbe | undefined
 }
 
 declare module '@deepseek-ai/dsh-session/types' {
@@ -177,6 +204,12 @@ declare module '@deepseek-ai/dsh-session/types' {
     'org/relinquish': { secretaryId: SessionId; targetId: SessionId }
     /** A secretary forbade itself from touching a session (acting log only). */
     'org/forbid': { secretaryId: SessionId; targetId: SessionId }
+    /**
+     * The target-side mirror of `org/forbid`: appended to the forbidden
+     * session's own log (live or cold) so replaying its old `org/claim` can
+     * never resurrect the edge. Folded into the same global forbidden set.
+     */
+    'org/forbidden': { secretaryId: SessionId; targetId: SessionId }
     /** A session's organisational role; an absent role clears it. */
     'org/role': { sessionId: SessionId; role?: OrgRole }
     /** A secretary handed a task brief to one of its leads (acting log only). */

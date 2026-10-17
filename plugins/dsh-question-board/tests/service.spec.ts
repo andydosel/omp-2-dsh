@@ -4,10 +4,11 @@
  * delegated-asker / bad-answer guards.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { QuestionBoardError, QuestionBoardRuntime } from '../src/service.ts'
+import { defineAskQuestionTool } from '../src/tool.ts'
 import { foldingHost, recordingAgent, subagentSession } from './harness.ts'
 
 /** A runtime whose host folds the session log and resolves the given live agents. */
@@ -131,5 +132,51 @@ describe('QuestionBoardRuntime.dismiss', () => {
     expect(board.answer(session, id, 'too late')).toBe(false)
     expect(board.list(session)[0]).toMatchObject({ status: 'dismissed' })
     expect(board.list(session)[0] !== undefined && 'answer' in board.list(session)[0]!).toBe(false)
+  })
+
+  it('lets a panel answer resolve a waiting blocking question instead of waking the asker again', () => {
+    const session = Session.create(SessionId('s9'))
+    const agent = recordingAgent('s9', 'idle')
+    const resolveBlocking = vi.fn(() => true)
+    const host = { ...foldingHost(new Map([[agent.id, agent]])), resolveBlocking }
+    const board = new QuestionBoardRuntime(host)
+    const id = board.ask(session, { content: [{ type: 'text', text: 'Ship?' }], blocking: true })
+
+    expect(board.answer(session, id, 'ship')).toBe(true)
+    expect(resolveBlocking).toHaveBeenCalledWith(session, id, 'ship')
+    expect(agent.followedUp).toHaveLength(0)
+    expect(agent.steered).toHaveLength(0)
+  })
+})
+
+describe('ask_question tool', () => {
+  it('pauses a blocking ask through the injected provider and returns the answer', async () => {
+    const session = Session.create(SessionId('s10'))
+    const ask = vi.fn(() => 'q-0')
+    const askBlocking = vi.fn(async () => 'ship it')
+    const tool = defineAskQuestionTool({ ask, askBlocking })
+    const value = await tool.execute(
+      { content: 'Ship?', blocking: true },
+      { agent: { session } } as never,
+    )
+    expect(value).toEqual({ id: 'q-0', answer: 'ship it' })
+    expect(askBlocking).toHaveBeenCalledWith(session, 'q-0', expect.objectContaining({ blocking: true }), expect.anything(), undefined)
+  })
+
+  it('returns immediately for a non-blocking ask', async () => {
+    const session = Session.create(SessionId('s11'))
+    const ask = vi.fn(() => 'q-0')
+    const askBlocking = vi.fn()
+    const tool = defineAskQuestionTool({ ask, askBlocking })
+    const value = await tool.execute({ content: 'FYI' }, { agent: { session } } as never)
+    expect(value).toEqual({ id: 'q-0' })
+    expect(askBlocking).not.toHaveBeenCalled()
+  })
+
+  it('fails loud when a blocking ask has no human provider', async () => {
+    const session = Session.create(SessionId('s12'))
+    const tool = defineAskQuestionTool({ ask: () => 'q-0' })
+    await expect(tool.execute({ content: 'Ship?', blocking: true }, { agent: { session } } as never))
+      .rejects.toThrow(/blocking=true needs ctx.userQuestions/)
   })
 })

@@ -97,12 +97,14 @@ if (-not (Test-Path (Join-Path $repoRoot 'README.md'))) {
     throw "missing README.md at the repo root (it ships inside the zip)."
 }
 
-# Build order matters: worker-spawn is the worker-dispatch base; compact-mode
+# Build order matters: dsh-util is the pure shared base every path/gate plugin
+# imports; worker-spawn is the worker-dispatch base; compact-mode
 # depends on tree-engine (workspace:*); orchestrator depends on advisor +
 # worker-spawn; the rest are standalone; the client-faced plugins (mode-ui,
 # dsh-org, dsh-task-board, dsh-question-board) additionally need lib/client.js.
 # `$plugins` lists the REPO directory names under plugins/ (the build targets).
 $plugins       = @(
+    'dsh-util',
     'dsh-worker-spawn', 'dsh-tree-engine', 'dsh-compact-mode',
     'dsh-tool-read-write', 'dsh-advisor', 'dsh-channel-wechat',
     'dsh-mode-ui', 'dsh-review-gate', 'dsh-question-board',

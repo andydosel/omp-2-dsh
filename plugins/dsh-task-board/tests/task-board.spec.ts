@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { defineTool, type ToolDefinition, type ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { TASK_BOARD_KEY, workSetTasks } from '../src/projection.ts'
+import { TASK_BOARD_KEY, isWorkSetMember } from '../src/projection.ts'
 import { TaskRevisionConflictError } from '../src/service.ts'
 import { WORK_SET_HEADER, WORK_SET_SECTION, renderWorkSet } from '../src/workset.ts'
 import type { TaskSnapshot } from '../src/types.ts'
@@ -234,7 +234,7 @@ describe('work set', () => {
     expect(later.sections.find(entry => entry.name === WORK_SET_SECTION)?.text)
       .toBe(`${WORK_SET_HEADER}\n- task-1 [in_progress] Review-gate requirement`)
 
-    expect(workSetTasks(board.boardOf(session)).map(entry => entry.id)).toEqual(['task-1'])
+    expect(board.boardOf(session).filter(isWorkSetMember).map(entry => entry.id)).toEqual(['task-1'])
     await scope.dispose()
   })
 })
@@ -257,7 +257,7 @@ describe('auto-close', () => {
     expect(board.get(session, started.id)).toMatchObject({ status: 'completed', inContext: false, revision: 3 })
     // Conservative: a task nobody started stays for the user to confirm.
     expect(board.get(session, untouched.id)?.status).toBe('pending')
-    expect(workSetTasks(board.boardOf(session)).map(entry => entry.id)).toEqual([untouched.id])
+    expect(board.boardOf(session).filter(isWorkSetMember).map(entry => entry.id)).toEqual([untouched.id])
   })
 
   it('ignores a failed result and an empty signal list', async () => {
@@ -360,5 +360,20 @@ describe('config', () => {
   it('fails loud on a bad knob instead of silently ignoring it', async () => {
     await expect(boardHarness({ maxContextBytes: -1 })).rejects.toThrow(/maxContextBytes/)
     await expect(boardHarness({ autoCloseSignals: [''] })).rejects.toThrow(/autoCloseSignals/)
+    await expect(boardHarness({ autoCloseSignal: ['x'] } as never)).rejects.toThrow(/unknown config key/)
+  })
+})
+
+describe('review-gate handoff', () => {
+  it('marks the newest open task awaiting approval and is a no-op on an empty board', async () => {
+    const { board, session } = await boardHarness()
+    expect(board.markAwaitingApproval(session)).toBeUndefined()
+
+    const first = board.create(session, { subject: 'old' })
+    board.close(session, first.id)
+    const open = board.create(session, { subject: 'needs a plan' })
+    expect(board.markAwaitingApproval(session)).toMatchObject({ id: open.id, status: 'awaiting_approval', revision: 2 })
+    // Already awaiting: idempotent, no extra event/revision.
+    expect(board.markAwaitingApproval(session)).toMatchObject({ id: open.id, revision: 2 })
   })
 })
