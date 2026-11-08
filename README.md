@@ -1,21 +1,26 @@
 # omp-2-dsh — DeepSeek Harness 插件套件(omp 移植)
 
-纯插件套件:把 12 个可运行插件(compact 模式、omp 风格读写工具、会话顾问、微信渠道、
-模式状态 UI、复核门、问题板、任务板、规则层、编排器、会话对等通道、会话组织)与 3 个
-纯库包(压缩审阅树引擎 `tree-engine`、worker 派发基座 `dsh-worker-spawn`、共享原语
-`dsh-util`)作为**独立 `@dsh-plugin/*` 包**附加到 DeepSeek Harness(dsh),**不改动 dsh 核心**。
-12 个可运行插件在启动时经由 cordis 覆盖层(`--patch`)加载,按**包名**从 dsh profile 目录解析;
-3 个纯库由各自的依赖方 import。
+纯插件套件:把 11 个可运行插件(omp 风格读写工具、会话顾问、微信渠道、模式状态 UI、复核门、
+问题板、任务板、规则层、编排器、会话对等通道、会话组织)与 2 个纯库包(worker 派发基座
+`dsh-worker-spawn`、共享原语 `dsh-util`)作为**独立 `@dsh-plugin/*` 包**附加到
+DeepSeek Harness(dsh),**不改动 dsh 核心**。11 个可运行插件在启动时经由 cordis 覆盖层
+(`--patch`)加载,按**包名**从 dsh profile 目录解析;2 个纯库由各自的依赖方 import。
+
+> **压缩能力已移除**:本套件不再实现 compaction(原 `compact-mode` 与 `tree-engine` 已删除)。
+> 上下文压缩交给外部 bundle(billion-context 等),套件里的 `compaction-basic` /
+> `command-compact` 行仍保持禁用,由那个 bundle 提供 `ctx.compaction` 与 `/compact*`。
+>
+> **advisor / org / 微信通道各自可独立安装**(不必装整套):见「独立安装」一节。
 
 - **对齐 dsh 版本:`0.2.1-rc.2`**(所有 `@deepseek-ai/dsh-*` 依赖按 `^0.2.1-rc.2` 声明,
   仅支持 0.2.1-rc.2,不再兼容 0.2.0-rc.2;`cordis@~4.0.5`)。见「dsh 版本对齐说明」。
 - 每个插件的 git 历史通过 `git subtree` 完整保留(见各 `plugins/*` 目录)。
-- 另有 **3 个纯库包**(均无插件入口、无 Context key、**不进 profile 挂载**):
-  `@dsh-plugin/tree-engine`(目录 `plugins/dsh-tree-engine`)是 `compact-mode` 的审阅树依赖,
+- 另有 **2 个纯库包**(均无插件入口、无 Context key、**不进 profile 挂载**):
   `@dsh-plugin/dsh-worker-spawn`(目录 `plugins/dsh-worker-spawn`)是 `orchestrator`
   (`subtask_parallel`)的 worker 派发基座,
-  `@dsh-plugin/dsh-util`(目录 `plugins/dsh-util`)是规则层/复核门/组织路径门共用的 glob 匹配器
-  与 XML 转义、session-id 归一化;三者随套件一起构建/分发。
+  `@dsh-plugin/dsh-util`(目录 `plugins/dsh-util`)是规则层/复核门/任务板等共用的 glob 匹配器
+  与 XML 转义、session-id 归一化;两者随套件一起构建/分发。
+  (`dsh-advisor`、`dsh-org`、`dsh-peers` 已不依赖 `dsh-util`:它们各自内联了所需原语,以便单独安装。)
 - 构建产物 `lib/` 不进 git;可运行插件以 GitHub Release 的 `dsh-suite-<version>.zip` 资产分发
   (dsh 按包名加载,`lib/` 必须随包附带)。
 
@@ -23,29 +28,87 @@
 
 | 插件 | 包名 | 客户端面 |
 |---|---|---|
-| tree-engine | `@dsh-plugin/tree-engine` | — |
-| compact-mode | `@dsh-plugin/dsh-compact-mode` | — |
 | tool-read-write | `@dsh-plugin/dsh-tool-read-write` | — |
-| advisor | `@dsh-plugin/dsh-advisor` | — |
-| channel-wechat | `@dsh-plugin/dsh-channel-wechat` | — |
+| advisor | `@dsh-plugin/dsh-advisor` | 浏览器 bundle(`lib/client.js`):会话顾问建议卡片(`conversation.chat.node` 键控座位,按严重度 nit/concern/blocker 分级着色);header 的 `ADVISOR · N` 徽标(点开是设置面板:开关 + 审查模型选择器,`conversation.session.header.utilities`) |
+| channel-wechat | `@dsh-plugin/dsh-channel-wechat` | 浏览器 bundle(`lib/client.js`):header 的 `WECHAT on/off` 徽标(`conversation.session.header.utilities`,点击执行 `/wechat status`);host 侧同名包注册 `wechatChannel` 投影(独立安装也自带) |
 | mode-ui | `@dsh-plugin/dsh-mode-ui` | 浏览器 bundle(`lib/client.js`) |
 | review-gate | `@dsh-plugin/dsh-review-gate` | — |
 | question-board | `@dsh-plugin/dsh-question-board` | 浏览器 bundle(`lib/client.js`):问题面板(按提问者分组的待答问题) |
-| task-board | `@dsh-plugin/dsh-task-board` | 浏览器 bundle(`lib/client.js`):任务面板(需求清单/工作集,行内闭环与重开) |
+| task-board | `@dsh-plugin/dsh-task-board` | 浏览器 bundle(`lib/client.js`):任务面板(需求清单/工作集,行内闭环与重开);header 的 `任务 N` chip(`conversation.session.header.utilities`,点击定位面板) |
 | rules | `@dsh-plugin/dsh-rules` | — |
 | orchestrator | `@dsh-plugin/dsh-orchestrator` | — |
 | peers | `@dsh-plugin/dsh-peers` | — |
-| org | `@dsh-plugin/dsh-org` | 浏览器 bundle(`lib/client.js`):组织面板(`conversation.input.dock`,接管会话列表 + 解除/禁止);左侧全局会话列表标"归 X 管/孤儿"(`sidebar.session.row.leading` + `hover`) |
+| org | `@dsh-plugin/dsh-org` | 浏览器 bundle(`lib/client.js`):组织面板(`conversation.input.dock`:org 开关、按标题/角色/工作区搜索的接管目标选择器、逐行解除/禁止);header 的 `ORG · role` 徽标与复制会话 ID(`conversation.session.header.utilities`);侧栏全局会话行标"归 X 管/孤儿"(`sidebar.session.row.leading` + `hover`)与接管按钮(`sidebar.workspaces.session.row.action`,先自动开启当前会话的 org 模式再 `/org claim`) |
 
-> 上表 13 行里,`tree-engine` 是纯库(无插件入口,由 `compact-mode` 以包名依赖,不单独挂行);
-> 表外还有共享库 **`dsh-worker-spawn`**(`@dsh-plugin/dsh-worker-spawn`):纯库包,无插件入口、
-> 无 Context key,不作为 profile 行挂载,仅作为 `orchestrator` 的运行时依赖随套件构建/分发。
-> 以及 **`dsh-util`**(`@dsh-plugin/dsh-util`):同为纯库包,提供全仓唯一的 glob 匹配器
-> (`rules` / `review-gate` / `org` 三处路径门共用)、XML 转义与 session-id 归一化。
-> 合计 **15 个包(12 个可运行插件 + 3 个共享库)**。
+`rules` / `review-gate` / 路径门共用)、XML 转义与 session-id 归一化。
+> 合计 **13 个包(11 个可运行插件 + 2 个共享库)**。
 
 > **`channel-wechat` 默认停用**。微信渠道需要**一个 WeChat iLink bot 账号**,且与 hermes 网关
 > 共用同一账号(互斥,后启动者 403)。启用方法见「channel-wechat 激活(可选)」。
+
+---
+
+## 独立安装(advisor / 三层组织架构 / 微信通道)
+
+这三个包**自带 `dsh.bundle` 声明和 `cordis.patch.yml`**,因此可以像任何第三方插件一样单独装进
+任意 profile,**不需要**本套件其余任何包:
+
+| 你想单独要的能力 | 装这个包 | 包内自带的行 |
+|---|---|---|
+| 会话顾问(host + 建议卡片 + header `ADVISOR · N` 徽标) | `dsh-advisor` | `advisor` |
+| 秘书 / 负责人 / worker 三层组织(面板 + `ORG · role` 徽标 + 侧栏归属标记 + 会话间投递) | `dsh-org` | `peers` + `org` |
+| 微信通道(host 长轮询 + `/wechat` 命令 + header `WECHAT` 徽标) | `dsh-channel-wechat` | `channel-wechat` |
+
+> **ADVISOR 徽标是设置面板**:点开后可以开关顾问,并从模型目录里选审查者模型(首项「跟随主会话模型」)。
+> 选择持久化在 `$DSH_HOME/storages/advisor-state.json`,重启后仍生效;命令行等价:`/advisor model`(报告当前)、
+> `/advisor model <provider/model>`(设置)、`/advisor model follow`(恢复跟随)。改模型时若顾问已开启,
+> 正在跑的审查者会被重建以套用新模型。
+
+```powershell
+# 装进已有的 web profile:之后直接 `dsh web` 就带着它启动
+dsh plugin --profile web add C:\path\to\dsh-suite-0.2.1\@dsh-plugin\dsh-advisor
+dsh plugin --profile web add C:\path\to\dsh-suite-0.2.1\@dsh-plugin\dsh-org
+dsh plugin --profile web add C:\path\to\dsh-suite-0.2.1\@dsh-plugin\dsh-channel-wechat
+
+# 也可以直接指向源码目录(git 仓库里就是可安装单元)
+dsh plugin --profile web add C:\Users\me\Documents\omp-2-dsh\plugins\dsh-advisor
+dsh plugin --profile web add C:\Users\me\Documents\omp-2-dsh\plugins\dsh-channel-wechat
+```
+
+> 全局 `dsh` 低于 0.2.1-rc.2 时(0.2.0-rc.2 会禁用插件行),改用 dsh monorepo 的本仓 CLI:
+> `node <dsh仓库>\apps\cli\lib\bin.js plugin --profile web add <包路径>`(本机 dsh 仓库为
+> `C:\Users\Vantage_XLST\Documents\dsh`)。
+
+要点:
+
+- `dsh plugin add` 把包写成该 profile 的 `dependencies`(本地目录用 `link:`),再把 bundle 追加到
+  该 profile `package.json` 的 `dsh.profile.bundles`;首次使用会自动初始化 profile(含
+  `@deepseek-ai/dsh-base`)。
+- **新 profile 需要 web 面**:自动初始化出来的 profile 只含 `dsh-base`,没有浏览器界面。要么装进
+  已有的 `web` profile(推荐),要么手动把 `@deepseek-ai/dsh-web-app` 加到该 profile 的
+  `dsh.profile.bundles` 里。
+- **org 不需要另装 `dsh-peers`**:`peers` 的编译产物已 vendor 进
+  `@dsh-plugin/dsh-org/lib/peers`,由包内 `cordis.patch.yml` 的 `@dsh-plugin/dsh-org/peers` 行加载;
+  `dsh-peers` 仍是唯一源码,构建脚本会校验 vendor 出来的代码没有 `@dsh-plugin/*` 运行时依赖。
+- **三个包都不依赖 `dsh-util`**:顾问的 XML 转义、org/peers 的 glob/转义/session-id 归一化都已内联,
+  所以单装一个包不会有"缺 `@dsh-plugin/dsh-util`"的死链。
+- **微信通道的徽标与 `wechatChannel` 投影随包发布**(`lib/client.js` + host 侧投影注册),
+  单装 `dsh-channel-wechat` 就有 `WECHAT` 徽标,不需要 `dsh-mode-ui`;套件里 mode-ui 的旧副本
+  暂时保留(槽位 id 不同,可共存),收尾时移除。
+- **微信通道默认 `enabled: true` 但没有凭证不轮询**:`accountId`/`token` 留空时插件照常加载、
+  徽标显示 `WECHAT off`,`/wechat` 回答「配置未通过启动检查」;填好凭证(见包内 README
+  「连接微信」)后重启即可。同一 iLink 账号与 hermes 互斥,先用 `hermes gateway stop` 停掉
+  hermes 网关(或把 `stateDir` 指向 hermes 的 `weixin/` 目录接管状态)。
+- 想调配置:在该 profile 的 `cordis.patch.yml`(或 `--patch` 覆盖层)里写同名行,后层按 id 整体替换;
+  也可以直接改 `node_modules/@dsh-plugin/<name>/cordis.patch.yml` 的默认值。
+- 验证:
+  ```powershell
+  dsh --profile web --dump-config | Select-String -Context 0,6 'dsh-advisor'
+  ```
+  末尾应出现 `# == @dsh-plugin/dsh-advisor` 段与 `- id: advisor` 行;启动后浏览器页面
+  `__DSH_BOOT__` 里会出现 `@dsh-plugin/dsh-advisor/client.js` 条目(org 同理,会带 `peers` + `org` 两行;
+  微信为 `- id: channel-wechat` 与 `@dsh-plugin/dsh-channel-wechat/client.js`)。
+- 卸载:`dsh plugin --profile web remove @dsh-plugin/dsh-advisor`(org、channel-wechat 同理)。
 
 ---
 
@@ -69,8 +132,8 @@
    # macOS / Linux
    export DEEPSEEK_API_KEY='sk-...'
    ```
-   > **没有 key 也能启动**:插件照常加载并 apply(compact 后端、`/compact*`、read/write 工具、
-   > advisor 运行时、orchestrator 编排、mode-ui 徽章、wechat 行 `enabled:false` 不轮询),Web 服务监听
+   > **没有 key 也能启动**:插件照常加载并 apply(read/write 工具、advisor 运行时、orchestrator
+   > 编排、mode-ui 徽章、wechat 行 `enabled:false` 不轮询),Web 服务监听
    > `http://127.0.0.1:3080`;只有发起模型请求时才会因无凭据失败。
 4. **pnpm 11 仅「构建/开发」路径需要**,从 Release 安装**不需要** pnpm
    (见下方「从 Release 安装」,它只复制文件 + 跑 `dsh web`,不跑 pnpm)。
@@ -94,12 +157,11 @@ dsh CLI 自动满足**(见「从 Release 安装」第 3 步末的依赖说明)�
 
 ```
 dsh-suite-0.2.1/
-├── @dsh-plugin/              # 15 个预构建包(12 插件 + 3 共享库:tree-engine、dsh-worker-spawn、dsh-util;
+├── @dsh-plugin/              # 13 个预构建包(11 插件 + 2 共享库:dsh-worker-spawn、dsh-util;
 │   │                         #  每个目录名 = 包名去掉 @dsh-plugin/ 前缀,loader 据此按包名解析)
-│   ├── tree-engine/          ├── dsh-compact-mode/
-│   ├── dsh-tool-read-write/  ├── dsh-advisor/
+│   ├── dsh-tool-read-write/  ├── dsh-advisor/       # dsh-advisor / dsh-org 也可单独安装
 │   ├── dsh-channel-wechat/   ├── dsh-mode-ui/          # 客户端面插件(带 lib/client.js):
-│   ├── dsh-review-gate/      ├── dsh-question-board/   #   mode-ui、question-board、
+│   ├── dsh-review-gate/      ├── dsh-question-board/   #   dsh-advisor、mode-ui、question-board、
 │   ├── dsh-task-board/       ├── dsh-rules/            #   task-board、dsh-org
 │   ├── dsh-orchestrator/     ├── dsh-peers/
 │   ├── dsh-org/              ├── dsh-worker-spawn/     # 纯库(无插件入口)
@@ -125,9 +187,9 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 它会一次性完成三件事(幂等,可重复运行):
 
-- 把 15 个预构建包(12 插件 + 3 共享库 `tree-engine`、`dsh-worker-spawn`、`dsh-util`)复制到
+- 把 13 个预构建包(11 插件 + 2 共享库 `dsh-worker-spawn`、`dsh-util`)复制到
   `~/.dsh/profiles/web/node_modules/@dsh-plugin/`
-  (cordis Loader 与 client-modules 据此**按包名**解析每一行,含 `mode-ui`/`question-board`/`task-board`/`dsh-org` 的 `lib/client.js`);
+  (cordis Loader 与 client-modules 据此**按包名**解析每一行,含 `dsh-advisor`/`mode-ui`/`question-board`/`task-board`/`dsh-org` 的 `lib/client.js`);
 - 把覆盖层落到 `~/.dsh/dsh-suite/cordis.patch.yml`(供 `start.ps1` / 手动命令引用);
 - 逐个校验每个包的可运行入口与 `lib/`。
 
@@ -210,7 +272,7 @@ dsh web --patch "$HOME\.dsh\dsh-suite\cordis.patch.yml" --dump-config
 输出应包含:
 
 - 被禁用:`compaction-basic`、`command-compact`、`tool-fs`(均 `disabled: true`);
-- 新插入(12 个插件行):`compact-mode`、`tool-read-write`、`advisor`(enabled +
+- 新插入(11 个插件行):`tool-read-write`、`advisor`(enabled +
   defaultTools/immuneTurns/syncBacklog)、`orchestrator`(reviewersPerRound/fanOut 等)、
   `mode-ui`(config 空)、`review-gate`(protectedPaths 等)、`channel-wechat`(`enabled: false`)、
   `question-board`、`rules`、`task-board`、`peers`、`org`(均默认 config);
@@ -225,15 +287,18 @@ dsh web --patch "$HOME\.dsh\dsh-suite\cordis.patch.yml" --dump-config
 ### 在线验证(需 API key)
 
 1. 打开 `dsh web`(浏览器,`http://127.0.0.1:3080`),**新建并打开一个会话(conversation)**。
-   - 头部工具栏会出现 **COMPACT / ADVISOR / WECHAT** 三个徽章;
+   - 头部工具栏会出现 **ADVISOR**(来自 `dsh-advisor`)与 **WECHAT**(来自 `dsh-channel-wechat`;
+    套件内 `mode-ui` 仍保留旧副本,收尾后移除)两个徽章
+  (COMPACT 徽章随压缩能力一起移除了);
    - 这些徽章渲染在**已打开的会话里,不是首页(home)**。
 2. 命令可用性:
-   - `/advisor on` 开会话顾问;`/compact` 触发 compact 模式(及 `/compact restore` 一键重放运行时状态);
+   - `/advisor on` 开会话顾问;
    - `/org on|off|claim|relinquish|forbid|list` 管理会话组织;`/wechat status` 查微信渠道状态(未激活时报告未启用);
    - read 工具走 omp 风格 selector:`read package.json:1-20`、`read agent://<workerId>`、
      归档/SQLite/URL 读取(来自 `dsh-tool-read-write`)。
-3. **关于 WECHAT**:徽章默认显示**未启用**(channel-wechat `enabled: false`)。它需要
-   **WeChat iLink bot 账号**才可用,见「channel-wechat 激活(可选)」。
+3. **关于 WECHAT**:套件 profile-main 里 `channel-wechat` 默认 `enabled: false`,徽章显示**未启用**;
+   独立安装的包默认 `enabled: true` 但没有凭证不轮询(仍是 `WECHAT off`)。两种方式都需要
+   **WeChat iLink bot 账号**才可用,见「channel-wechat 激活(可选)」与包内 README「连接微信」。
 
 ---
 
@@ -262,13 +327,13 @@ iLink 账号的 **hermes** 网关(同账号互斥,后启动者 403);再把补丁
 
 ### 构建(一次性)
 
-从源码构建全部 15 个包(依赖序:dsh-util → worker-spawn → tree-engine → compact-mode →
-tool-read-write → advisor → channel-wechat → mode-ui → review-gate →
-question-board → rules → peers → org → task-board → orchestrator):
+从源码构建全部 13 个包(依赖序:dsh-util → worker-spawn → tool-read-write → advisor →
+channel-wechat → mode-ui → review-gate → question-board → rules → peers → org →
+task-board → orchestrator):
 
 ```powershell
-pnpm install      # 根工作区一次安装,解析全部 15 包(compact-mode 经 workspace:* 拉 tree-engine)
-pnpm run build    # 按依赖序构建(产生各包 lib/;客户端面插件 mode-ui、question-board、task-board、dsh-org 额外产出 lib/client.js)
+pnpm install      # 根工作区一次安装,解析全部 13 包
+pnpm run build    # 按依赖序构建(产生各包 lib/;客户端面插件 dsh-advisor、mode-ui、question-board、task-board、dsh-org 额外产出 lib/client.js)
 pnpm run typecheck
 ```
 
@@ -287,10 +352,12 @@ powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -Version 0.2.1
 
 ### 开发
 
-- 单根工作区管理全部插件;改客户端面插件(mode-ui、question-board、task-board、dsh-org)源码后必须重建 `lib/client.js`,
+- 单根工作区管理全部插件;改客户端面插件(dsh-advisor、mode-ui、question-board、task-board、dsh-org)源码后必须重建 `lib/client.js`,
   浏览器加载的是磁盘上的 bundle。
 - 覆盖层(`profiles/main/cordis.patch.yml`)会禁用 `compaction-basic` / `command-compact` /
-  `tool-fs`;web profile 上 stock `tool-fs` 行是幂等 no-op,具体理由见文件内注释。
+  `tool-fs`;前两者让位给外部压缩 bundle(billion-context 等),如果你不跑这类 bundle,
+  删掉那两行即可恢复 stock 压缩;web profile 上 stock `tool-fs` 行是幂等 no-op。
+  具体理由见文件内注释。
 - 更细的机制(Loader 如何按包名解析、为何禁用基座行、`standard-rw` preset 声明行与它的同名
   shadow 规则、web 面 read/write 替换、wechat 激活步骤等)见仓库内 `profiles/main/README.md`
   (仅源码仓库有,不在 Release zip 里)。
