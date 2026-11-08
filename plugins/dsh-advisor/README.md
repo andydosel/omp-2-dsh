@@ -54,7 +54,9 @@ DeepSeek Harness 的**独立顾问插件**：给一个会话挂一个（或多�
    dsh plugin --profile web add "$env:USERPROFILE\.dsh\vendor\advisor\dsh-plugin-dsh-advisor-0.2.1.tgz" --config.confirmModulesPurge=false
    ```
 
-> ⚠️ **profile 名要用 `web`**。profile 首次创建时按名字套模板（`web` = `dsh-base` + `dsh-web-app`），自定义名字只会拿到 `dsh-base`，**没有浏览器界面**，徽标和卡片也就无从显示。
+> ⚠️ **profile 里必须有 Web 界面 bundle（`@deepseek-ai/dsh-web-app`）**。`web` 只是现成的模板名（`web` = `dsh-base` + `dsh-web-app`）；自定义名字首次创建只会拿到 `dsh-base`，**没有浏览器界面**，徽标和卡片也就无从显示。
+>
+> ⚠️ **桌面版（Electron）的 profile 是保留名 `desktop`，由桌面应用独占管理**：命令行 `dsh plugin --profile desktop …` 会被拒绝（`profile "desktop" is managed exclusively by the Electron application`）。给桌面版装本插件，请用桌面应用里的「设置 → 插件」界面；它同样带 `dsh-web-app` 界面，徽标与卡片正常显示。
 >
 > ⚠️ profile 的 `package.json` 会记录 **tgz 的绝对路径**（`"file:C:/.../dsh-plugin-dsh-advisor-0.2.1.tgz"`）。tgz 被移动或删除后，该 profile 后续任何 `pnpm install` 都会失败。要换位置，先 `dsh plugin --profile web remove @dsh-plugin/dsh-advisor`，再从新路径重新 `add`。
 
