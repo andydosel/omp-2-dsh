@@ -75,7 +75,15 @@ function slugify(name: string): string {
   return slug === '' ? 'reviewer' : slug
 }
 
-/** Resolve the reviewer specs from the watchdog roster, falling back to one default reviewer. */
+/**
+ * Resolve the reviewer specs from the watchdog roster, falling back to one
+ * default reviewer.
+ *
+ * `spec.model` carries only a ROSTER-explicit model: the plugin config's
+ * `model` and the runtime override chosen in the header panel are applied
+ * later, in {@link AdvisorRuntime}'s route resolution, so the priority stays
+ * roster entry > runtime override > plugin config > follow the primary.
+ */
 export function resolveReviewerSpecs(config: ResolvedAdvisorConfig, watchdog: WatchdogSource): ReviewerSpec[] {
   if (watchdog.roster !== undefined && watchdog.roster.entries.length > 0) {
     return watchdog.roster.entries.map((entry) => ({
@@ -89,7 +97,6 @@ export function resolveReviewerSpecs(config: ResolvedAdvisorConfig, watchdog: Wa
   return [{
     name: 'default',
     enabled: true,
-    ...config.model !== '' ? { model: config.model } : {},
     tools: config.defaultTools,
   }]
 }
@@ -144,6 +151,12 @@ export class AdvisorRuntime {
    * start, disable, or teardown so a stale failure never masks a live state.
    */
   private reviewerError: string | undefined
+  /**
+   * Reviewer model route chosen at runtime (the header panel's model picker),
+   * `''` when unset. Persisted with the rest of the state so a restart restores
+   * it; it outranks the plugin config but never a roster entry's own model.
+   */
+  private modelOverride = ''
   private readonly observer: DeltaObserver
   private readonly delivery: DeliveryController
   private readonly guard = new EmissionGuard()
@@ -196,7 +209,12 @@ export class AdvisorRuntime {
     // but only when a snapshot was actually loaded — never override config.
     void this.store.load().then(() => {
       if (!this.store.hasSnapshot) return
-      this.enabled = this.store.current().enabled
+      const snapshot = this.store.current()
+      this.enabled = snapshot.enabled
+      // A persisted route is the panel's pick, so it outranks the config — but
+      // a snapshot that merely echoed the configured route is not an override
+      // (a later config edit must still win).
+      if (snapshot.model !== '' && snapshot.model !== this.config.model) this.modelOverride = snapshot.model
       this.emitStatus()
       if (this.enabled && this.primary !== undefined && this.phase === 'idle') {
         this.detach('advisor restart', this.start())
@@ -312,7 +330,39 @@ export class AdvisorRuntime {
     this.store.set({
       enabled: this.enabled,
       reviewers: this.enabled ? this.reviewers.size : 0,
+      model: this.effectiveModel,
     })
+  }
+
+  /**
+   * The reviewer model route in effect: the runtime override when set,
+   * otherwise the plugin config; `''` means "follow the primary model".
+   */
+  get effectiveModel(): string {
+    return this.modelOverride !== '' ? this.modelOverride : this.config.model
+  }
+
+  /**
+   * Set the reviewer model route from the UI/command surface. The pick is
+   * persisted with the rest of the state and applied immediately: live
+   * reviewers are rebuilt, because a reviewer's model is fixed at creation.
+   * @param route - `provider/model`, a bare model id, or `''` to follow the primary.
+   * @returns the effective route after the change.
+   */
+  setReviewerModel(route: string): string {
+    const next = route.trim()
+    if (next === this.modelOverride) return this.effectiveModel
+    this.modelOverride = next
+    this.ctx.logger.info('dsh-advisor: reviewer model route -> %s', next === '' ? '(follow primary)' : next)
+    this.emitStatus()
+    if (!this.enabled || this.primary === undefined) return this.effectiveModel
+    if (this.phase === 'ready' && this.reviewers.size > 0) {
+      this.scheduleReset('reviewer model change')
+    } else if (this.phase === 'idle' && this.reviewers.size === 0) {
+      // A previous start failed (or was never run): pick the new route up now.
+      this.detach('advisor start', this.start())
+    }
+    return this.effectiveModel
   }
 
   /** The current advisor state (the `advisorStatus` projection's read). */
@@ -705,10 +755,10 @@ export class AdvisorRuntime {
     return { id: handle.agent.id, name: spec.name, spec, agent: handle.agent, handle }
   }
 
-  /** Resolve the reviewer's model route: explicit override or the primary's. */
+  /** Resolve the reviewer's model route: an explicit spec, the runtime override, the config, or the primary's. */
   private reviewerAgentOptions(primary: Agent, spec: ReviewerSpec): AgentOptions {
-    const model = spec.model ?? (this.config.model !== '' ? this.config.model : '')
-    if (model === '') {
+    const route = this.reviewerRoute(spec)
+    if (route === undefined) {
       // Follow the primary agent's route exactly.
       return {
         ...primary.options.provider !== undefined ? { provider: primary.options.provider } : {},
@@ -716,10 +766,28 @@ export class AdvisorRuntime {
         ...primary.options.maxTokens !== undefined ? { maxTokens: primary.options.maxTokens } : {},
       }
     }
+    const provider = route.provider ?? primary.options.provider
     return {
-      ...primary.options.provider !== undefined ? { provider: primary.options.provider } : {},
-      model,
+      ...provider !== undefined ? { provider } : {},
+      model: route.model,
     }
+  }
+
+  /**
+   * Resolve the model route for one reviewer. Priority: the roster entry's own
+   * `model`, then the runtime override (the header panel's pick), then the
+   * plugin config — then empty, meaning "follow the primary conversation".
+   * `provider/model` splits on the FIRST slash only (model ids never contain
+   * one); a bare model id keeps the primary's provider.
+   * @param spec - the reviewer spec being created.
+   * @returns the route, or undefined to follow the primary agent's options.
+   */
+  private reviewerRoute(spec: ReviewerSpec): { provider?: string; model: string } | undefined {
+    const raw = spec.model !== undefined && spec.model !== '' ? spec.model : this.effectiveModel
+    if (raw === '') return undefined
+    const slash = raw.indexOf('/')
+    if (slash <= 0 || slash === raw.length - 1) return { model: raw }
+    return { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
   }
 
   /**
@@ -802,6 +870,7 @@ export class AdvisorRuntime {
   statusText(): string {
     const lines: string[] = []
     lines.push(`advisor: ${this.enabled ? 'enabled' : 'disabled'}`)
+    lines.push(`model: ${this.effectiveModel === '' ? '(follow primary)' : this.effectiveModel}`)
     if (this.primary === undefined) {
       lines.push('not attached to a session')
       return lines.join('\n')

@@ -1,0 +1,132 @@
+/* Header badge anchor: the button stays flush with the other header chips and
+   the panel hangs off it. The header row does not clip overflow, so an
+   absolutely positioned panel renders outside the row without a portal. */
+.anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+}
+
+/* Elevated card, same surface contract as the kit's menus: layer-1 background,
+   the panel elevation, and the large radius. Tokens only — a hard-coded white
+   would break the dark theme. */
+.panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 300px;
+  padding: 12px;
+  border-radius: var(--dsw-radius-lg, 10px);
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #fff));
+  color: var(--dsw-alias-label-primary, inherit);
+  box-shadow: var(--dsw-elevation-panel, 0 8px 24px rgba(0, 0, 0, 0.18));
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--dsw-alias-label-secondary, #8a8f98);
+}
+
+.close {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm, 4px);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #8a8f98);
+  font: inherit;
+  font-size: 14px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.14));
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.label {
+  flex: none;
+  width: 56px;
+  color: var(--dsw-alias-label-secondary, #8a8f98);
+}
+
+.switch,
+.switchOn {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35));
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #8a8f98);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.switchOn {
+  color: #b45309;
+  border-color: rgba(180, 83, 9, 0.55);
+  background: rgba(180, 83, 9, 0.1);
+}
+
+.switch:disabled,
+.switchOn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: var(--dsw-radius-sm, 4px);
+  border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35));
+  background: var(--dsw-alias-bg-base, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.select:disabled {
+  opacity: 0.6;
+}
+
+.hint {
+  color: var(--dsw-alias-label-secondary, #8a8f98);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.error {
+  color: #b91c1c;
+  font-size: 11px;
+  line-height: 16px;
+  word-break: break-word;
+}

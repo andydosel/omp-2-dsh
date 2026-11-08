@@ -39,12 +39,20 @@ export interface AdvisorAdviceEvent {
 export interface AdvisorStatusProjection {
   enabled: boolean
   reviewers: number
+  /**
+   * Effective reviewer model route (`provider/model`, a bare model id, or
+   * `''` for "follow the primary conversation's model"). The panel uses it to
+   * preselect its model row; the badge keeps the reviewer count as its label.
+   */
+  model: string
 }
 
 /** Host fold state of the `advisorStatus` unit. State and wire value are the same shape. */
 export interface AdvisorStatusUnitState {
   enabled: boolean
   reviewers: number
+  /** Effective reviewer model route (`''` = follow the primary model). */
+  model: string
 }
 
 declare module '@deepseek-ai/dsh-session-projection/types' {

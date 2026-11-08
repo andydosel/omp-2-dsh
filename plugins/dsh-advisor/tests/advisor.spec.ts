@@ -204,6 +204,35 @@ describe('reviewer construction', () => {
     expect(options.agentOptions).toMatchObject({ model: 'deepseek-review' })
   })
 
+  it('parses a provider/model route from the live override', async () => {
+    attach()
+    await bindPrimary()
+    runtime.setReviewerModel('other-provider/review-model')
+    await flush()
+    await flush()
+    // The change rebuilt the roster: the newest create call carries the route.
+    const calls = ctx.createSpy.mock.calls
+    const options = calls[calls.length - 1]![0] as { agentOptions: Record<string, unknown> }
+    expect(options.agentOptions).toMatchObject({ provider: 'other-provider', model: 'review-model' })
+    runtime.setReviewerModel('')
+    await flush()
+    await flush()
+  })
+
+  it('keeps the primary provider for a bare model id override', async () => {
+    attach()
+    await bindPrimary()
+    runtime.setReviewerModel('deepseek-review')
+    await flush()
+    await flush()
+    const calls = ctx.createSpy.mock.calls
+    const options = calls[calls.length - 1]![0] as { agentOptions: Record<string, unknown> }
+    expect(options.agentOptions).toMatchObject({ provider: 'test-provider', model: 'deepseek-review' })
+    runtime.setReviewerModel('')
+    await flush()
+    await flush()
+  })
+
   it('creates one reviewer per enabled roster entry', async () => {
     await writeFile(join(tmp, 'WATCHDOG.yml'), [
       'roster:',
@@ -772,13 +801,13 @@ describe('advisor status (plugin-owned state)', () => {
     primary = makePrimary()
     ctx.emit('agent/created', { agent: primary })
     await flush()
-    expect(runtime.status()).toEqual({ enabled: false, reviewers: 0 })
+    expect(runtime.status()).toEqual({ enabled: false, reviewers: 0, model: '' })
   })
 
   it('reports the live reviewer count after reviewers start', async () => {
     attach()
     await bindPrimary()
-    expect(runtime.status()).toEqual({ enabled: true, reviewers: 1 })
+    expect(runtime.status()).toEqual({ enabled: true, reviewers: 1, model: '' })
   })
 
   it('reports disabled with zero reviewers on disable', async () => {
@@ -786,7 +815,7 @@ describe('advisor status (plugin-owned state)', () => {
     await bindPrimary()
     runtime.disable()
     await flush()
-    expect(runtime.status()).toEqual({ enabled: false, reviewers: 0 })
+    expect(runtime.status()).toEqual({ enabled: false, reviewers: 0, model: '' })
   })
 })
 
@@ -809,6 +838,29 @@ describe('/advisor commands', () => {
     expect(advisorCommandHandler(runtime, 'on').kind).toBe('success')
     expect(runtime.isEnabled).toBe(true)
     await flush()
+  })
+
+  it('sets and clears the reviewer model route', () => {
+    attach()
+    const text = (result: unknown): string => (result as { text?: string }).text ?? ''
+
+    expect(advisorCommandHandler(runtime, 'model').kind).toBe('success')
+    expect(text(advisorCommandHandler(runtime, 'model'))).toContain('跟随主会话模型')
+
+    const set = advisorCommandHandler(runtime, 'model other-provider/review-model')
+    expect(set.kind).toBe('success')
+    expect(text(set)).toContain('other-provider/review-model')
+    expect(runtime.status().model).toBe('other-provider/review-model')
+
+    for (const keyword of ['follow', 'default', '-']) {
+      expect(advisorCommandHandler(runtime, `model ${keyword}`).kind).toBe('success')
+      expect(runtime.status().model).toBe('')
+      advisorCommandHandler(runtime, 'model other-provider/review-model')
+    }
+
+    // The verb is case-insensitive; the route keeps its own casing.
+    expect(advisorCommandHandler(runtime, 'MODEL follow').kind).toBe('success')
+    expect(runtime.status().model).toBe('')
   })
 
   it('rejects unknown subcommands', () => {

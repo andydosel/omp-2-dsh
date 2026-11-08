@@ -11,8 +11,10 @@
  * after a refresh because the event is in the session log.
  *
  * The badge registers one entry in the `conversation.session.header.utilities`
- * band, reads the host-computed `advisorStatus` projection (zero client-side
- * folding), and executes `/advisor on|off` through `ctx.remote.commands`.
+ * band and reads the host-computed `advisorStatus` projection (zero
+ * client-side folding). Clicking it opens a settings panel whose switch and
+ * reviewer-model picker travel as slash commands through `ctx.remote.commands`,
+ * so the host stays the only writer of persisted advisor state.
  *
  * @module @dsh-plugin/dsh-advisor/client
  */
@@ -35,12 +37,23 @@ import type {} from '../../src/types.ts'
 import { AdvisorAdviceCard } from './AdvisorAdviceCard.tsx'
 import { ADVISOR_ADVICE_NODE_KIND, advisorAdviceDefinition } from './advisor-advice-node.ts'
 import { AdvisorBadge } from './badge/AdvisorBadge.tsx'
+import type { ModelDirectoryFace } from './badge/model-directory.ts'
+import { adaptModelDirectory } from './badge/model-directory.ts'
 
 export type { AdvisorAdviceCardProps } from './AdvisorAdviceCard.tsx'
 export { ADVISOR_ADVICE_NODE_KIND, advisorAdviceDefinition } from './advisor-advice-node.ts'
 export { AdvisorBadge } from './badge/AdvisorBadge.tsx'
-export type { AdvisorBadgeProps } from './badge/AdvisorBadge.tsx'
+export type { AdvisorBadgeInjected, AdvisorBadgeProps } from './badge/AdvisorBadge.tsx'
+export { AdvisorPanel, FOLLOW_PRIMARY_LABEL } from './badge/AdvisorPanel.tsx'
+export type { AdvisorPanelProps } from './badge/AdvisorPanel.tsx'
 export type { ModeBadgeInjected, ModeBadgeProps } from './badge/ModeBadge.tsx'
+export { adaptModelDirectory, EMPTY_DIRECTORY_SNAPSHOT, normalizeDirectory } from './badge/model-directory.ts'
+export type {
+  ModelChoice,
+  ModelDirectoryFace,
+  ModelDirectorySnapshot,
+  ModelProviderChoice,
+} from './badge/model-directory.ts'
 
 /**
  * Required services: the conversation and slot registries (card), plus the
@@ -83,6 +96,42 @@ async function executeCommand(ctx: Context, sessionId: SessionId, command: strin
 }
 
 /**
+ * Resolved model directories, one per session and cached for the page's
+ * lifetime. The adapter keeps `getSnapshot()` referentially stable, which the
+ * panel's `useSyncExternalStore` needs; rebuilding it per render would loop.
+ */
+const modelDirectories = new Map<string, ModelDirectoryFace>()
+
+/**
+ * Resolve the session's model directory through the web app's optional
+ * `modelDirectories` service.
+ *
+ * The service belongs to `ui-model-selection`, which this bundle must not
+ * depend on: a profile without that client plugin simply has no catalog, and
+ * the panel must degrade instead of failing. So the lookup is structural and
+ * every failure (missing service, unbound session scope, unusable value)
+ * collapses to undefined.
+ * @returns the adapter, or undefined when no catalog can be read.
+ */
+function resolveModelDirectory(ctx: Context, sessionId: SessionId): ModelDirectoryFace | undefined {
+  const cached = modelDirectories.get(sessionId)
+  if (cached !== undefined) return cached
+  // `ctx.get` is typed through cordis' reflect map; an unregistered key falls
+  // back to the string overload, so no import of the owning package is needed.
+  const resolver = ctx.get('modelDirectories') as { directoryFor?: (id: SessionId) => unknown } | undefined
+  if (resolver === undefined || typeof resolver.directoryFor !== 'function') return undefined
+  try {
+    const face = adaptModelDirectory(resolver.directoryFor(sessionId))
+    if (face === undefined) return undefined
+    modelDirectories.set(sessionId, face)
+    return face
+  } catch {
+    // Unknown session scope or unbound binding: no catalog for this session.
+    return undefined
+  }
+}
+
+/**
  * Client plugin body: register the advice card and the header badge.
  * @param ctx - client root context.
  */
@@ -102,8 +151,10 @@ export function apply(ctx: Context): void {
       id: 'advisor-status',
       order: 20,
       inject: (sessionId: SessionId) => ({
-        // Failure copy is user-facing Chinese; ModeBadge renders it as 失败: …
+        // Failure copy is user-facing Chinese; the badge renders it as 失败: …
         runCommand: (command: string) => executeCommand(ctx, sessionId, command),
+        // Optional seat: undefined disables the panel's model picker.
+        modelDirectory: () => resolveModelDirectory(ctx, sessionId),
       }),
     }, AdvisorBadge),
   ), 'dsh-advisor: header badge')

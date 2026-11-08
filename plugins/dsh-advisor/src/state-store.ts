@@ -10,10 +10,20 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-/** The advisor runtime's whole state (what the badge shows). */
+/**
+ * The advisor runtime's whole state (what the header badge and its panel show).
+ *
+ * `model` is the reviewer model route: `provider/model`, or a bare model id
+ * (the primary's provider is reused), or `''` for "follow the primary
+ * conversation's model". It is the effective route — a runtime override chosen
+ * in the UI panel wins over the plugin config, so a restart restores the
+ * user's pick without a config edit.
+ */
 export interface AdvisorState {
   enabled: boolean
   reviewers: number
+  /** Effective reviewer model route; empty = follow the primary model. */
+  model: string
 }
 
 /** Cap for the plugin-owned JSON snapshot. */
@@ -37,7 +47,7 @@ export class AdvisorStore {
   /** Whether a persisted snapshot was actually loaded (not a fresh start). */
   hasSnapshot = false
 
-  private latest: AdvisorState = { enabled: false, reviewers: 0 }
+  private latest: AdvisorState = { enabled: false, reviewers: 0, model: '' }
   private loaded = false
   private writeTail: Promise<void> = Promise.resolve()
 
@@ -81,6 +91,7 @@ export class AdvisorStore {
     this.latest = {
       enabled: state.enabled === true,
       reviewers: typeof state.reviewers === 'number' ? state.reviewers : 0,
+      model: typeof state.model === 'string' ? state.model : '',
     }
     this.hasSnapshot = true
   }

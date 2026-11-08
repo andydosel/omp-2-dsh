@@ -25,6 +25,7 @@ export type { AdvisorStatusProjection, AdvisorStatusUnitState } from './types.ts
 const advisorStatusSchema: ZodType<AdvisorStatusProjection> = zod.object({
   enabled: zod.boolean(),
   reviewers: zod.number().int().nonnegative(),
+  model: zod.string(),
 })
 
 /**
@@ -33,7 +34,7 @@ const advisorStatusSchema: ZodType<AdvisorStatusProjection> = zod.object({
  * @returns the browser-visible payload.
  */
 export function viewAdvisorStatus(state: AdvisorStatusUnitState): AdvisorStatusProjection {
-  return { enabled: state.enabled, reviewers: state.reviewers }
+  return { enabled: state.enabled, reviewers: state.reviewers, model: state.model }
 }
 
 /**
@@ -54,13 +55,20 @@ export function registerAdvisorStatusProjection(
     projectionCtx.sessionProjections.register<'advisorStatus', AdvisorStatusUnitState>({
       key: 'advisorStatus',
       stateSchema: advisorStatusSchema,
-      init: () => ({ enabled: false, reviewers: 0 }),
+      init: () => ({ enabled: false, reviewers: 0, model: '' }),
       apply: (state) => {
-        const next = read() ?? { enabled: false, reviewers: 0 }
-        return next.enabled === state.enabled && next.reviewers === state.reviewers ? state : next
+        const next = read() ?? { enabled: false, reviewers: 0, model: '' }
+        return next.enabled === state.enabled
+          && next.reviewers === state.reviewers
+          && next.model === state.model
+          ? state
+          : next
       },
       wire: { viewSchema: advisorStatusSchema, view: viewAdvisorStatus },
-      stateVersion: 1,
+      // Bumped when the folded state gained `model`: the projection cache keys
+      // rows by this version, so older rows (which lack the field) are dropped
+      // and refolded instead of failing the wire schema.
+      stateVersion: 2,
     })
   })
 }
