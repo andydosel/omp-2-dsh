@@ -26,7 +26,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ResolvedAdvisorConfig } from './config.ts'
 import { DeltaObserver, serializeDelta, type FeedKind } from './delta.ts'
 import { ADVISE_TOOL, type AdviseArgs } from './advise-tool.ts'
-import { ADVISOR_SOURCE_KIND, advisoryMessage, decideDelivery, DeliveryController, inboxHasPending, readPrimaryState } from './delivery.ts'
+import { ADVISOR_SOURCE_KIND, advisoryMessage, decideDelivery, DeliveryController, inboxHasPending, readPrimaryState, type DeliveryDecision } from './delivery.ts'
 import { EmissionGuard } from './emission-guard.ts'
 import { composeReviewer } from './reviewer.ts'
 import type { Severity } from './severity.ts'
@@ -94,6 +94,17 @@ export function resolveReviewerSpecs(config: ResolvedAdvisorConfig, watchdog: Wa
   }]
 }
 
+/**
+ * Whether an agent-creation failure means the reviewer session id already
+ * exists in the backend (a reviewer from an earlier process lifetime).
+ * @param error - the rejection from `ctx.agents.create`.
+ * @returns true when resuming the persisted session is the correct recovery.
+ */
+function isExistingSessionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return error.name === 'SessionAlreadyExistsError' || /session .* already exists/i.test(error.message)
+}
+
 /** Parse the raw `arguments` JSON string of an advise tool call. */
 function parseAdviseArgs(raw: string): AdviseArgs | undefined {
   let parsed: unknown
@@ -138,6 +149,39 @@ export class AdvisorRuntime {
   private readonly guard = new EmissionGuard()
   private readonly adviseCalls = new Map<string, AdviseArgs>()
 
+  /**
+   * Run a side effect after the session publication that triggered it returns.
+   * The session store refuses an append re-entered while another append is
+   * being published; a `followup`/`append`/`inject`/`steer` issued straight
+   * from a `session/event` listener hits that guard, and the resulting
+   * rejection would otherwise escape as an unhandled one and stop the host.
+   * `setImmediate` leaves the publish frame and preserves listener order; the
+   * delivery decision itself is not re-evaluated.
+   * @param label - task name used in the failure log.
+   * @param task - the side effect to run after publication.
+   */
+  private afterPublish(label: string, task: () => void | Promise<void>): void {
+    setImmediate(() => {
+      try {
+        this.detach(label, Promise.resolve(task()))
+      } catch (error) {
+        this.ctx.logger.warn('dsh-advisor: %s failed: %o', label, error)
+      }
+    })
+  }
+
+  /**
+   * Attach a failure log to a detached async task so a background failure is
+   * never an unhandled rejection.
+   * @param label - task name used in the failure log.
+   * @param task - the in-flight task.
+   */
+  private detach(label: string, task: Promise<void>): void {
+    void task.catch((error: unknown) => {
+      this.ctx.logger.warn('dsh-advisor: %s failed: %o', label, error)
+    })
+  }
+
   /** Plugin-owned advisor state (enabled flag + reviewer count), persisted. */
   readonly store = new AdvisorStore()
 
@@ -155,7 +199,7 @@ export class AdvisorRuntime {
       this.enabled = this.store.current().enabled
       this.emitStatus()
       if (this.enabled && this.primary !== undefined && this.phase === 'idle') {
-        void this.start()
+        this.detach('advisor restart', this.start())
       }
     }).catch((error: unknown) => {
       ctx.logger.warn('dsh-advisor: failed to load advisor state snapshot: %o', error)
@@ -169,15 +213,23 @@ export class AdvisorRuntime {
     // share one handler (no second binding pass). This handler must stay
     // synchronous — it never awaits its own owner's disposal or the agent.
     this.ctx.on('agent/created', ({ agent, source }) => {
-      void this.maybeBind(agent)
+      this.detach('agent bind', this.maybeBind(agent))
       if (source === 'resume' && this.isPrimary(agent)) this.scheduleReset('resume')
       return undefined
     })
     this.ctx.on('agent/disposed', ({ agent }) => {
-      if (this.isPrimary(agent)) void this.teardownPrimary()
+      if (this.isPrimary(agent)) this.detach('primary teardown', this.teardownPrimary())
     })
     this.ctx.on('agent/inbox/claimed', ({ agent, message }) => {
-      if (this.isPrimary(agent) && message.source.kind === 'user') this.delivery.onUserInput()
+      if (message.source.kind !== 'user') return
+      if (this.isPrimary(agent)) {
+        this.delivery.onUserInput()
+        return
+      }
+      // A human prompt in another top-level session is the strongest signal
+      // of the session the user is actually looking at: follow it instead of
+      // staying attached to whichever agent happened to resume first.
+      this.detach('advisor rebind', this.rebind(agent))
     })
     this.ctx.on('agent/pre-step', async (payload, next) => {
       if (this.isPrimary(payload.agent) && this.isLive()) {
@@ -213,7 +265,7 @@ export class AdvisorRuntime {
 
     // Bind to an already-running agent (plugin loaded after the primary).
     for (const agent of this.ctx.agents.list()) {
-      void this.maybeBind(agent)
+      this.detach('agent bind', this.maybeBind(agent))
     }
   }
 
@@ -231,7 +283,7 @@ export class AdvisorRuntime {
     this.ctx.logger.info('dsh-advisor: enabled')
     this.emitStatus()
     if (this.primary !== undefined && this.phase === 'idle') {
-      void this.start()
+      this.detach('advisor start', this.start())
     }
   }
 
@@ -247,7 +299,7 @@ export class AdvisorRuntime {
     this.reviewerError = undefined
     this.phase = 'idle'
     this.emitStatus()
-    void this.disposeReviewers()
+    this.detach('reviewer disposal', this.disposeReviewers())
   }
 
   /**
@@ -278,21 +330,60 @@ export class AdvisorRuntime {
     return this.enabled && this.phase === 'ready'
   }
 
-  /** Bind to a candidate agent if none is bound and it matches the config. */
-  private async maybeBind(agent: Agent): Promise<void> {
-    if (this.primary !== undefined) return
-    if (this.config.agentId !== '' && agent.id !== this.config.agentId) return
+  /** Whether an agent is a legal primary candidate for this runtime. */
+  private canBind(agent: Agent): boolean {
+    if (this.config.agentId !== '' && agent.id !== this.config.agentId) return false
     // Never bind to our own reviewer sessions (only reachable on a replay).
-    if (this.reviewers.has(agent.id)) return
+    if (this.reviewers.has(agent.id)) return false
+    // Subagent sessions are reviewed work, never the primary conversation.
+    return agent.session.header.origin !== 'subagent'
+  }
+
+  /** Point the runtime at `agent`, resetting every per-primary slot. */
+  private adopt(agent: Agent, verb: 'attached to' | 'rebound to'): void {
     this.primary = agent
     this.lastGeneration = agent.session.surface.replaceGeneration
     this.delivery.reset()
     this.guard.reset()
-    this.ctx.logger.info('dsh-advisor: attached to session %s', agent.id)
+    this.adviseCalls.clear()
+    this.reviewerError = undefined
+    this.phase = 'idle'
+    this.ctx.logger.info('dsh-advisor: %s session %s', verb, agent.id)
     this.emitStatus()
+  }
+
+  /** Bind to a candidate agent if none is bound and it matches the config. */
+  private async maybeBind(agent: Agent): Promise<void> {
+    if (this.primary !== undefined) return
+    if (!this.canBind(agent)) return
+    this.adopt(agent, 'attached to')
     if (this.enabled && this.phase === 'idle') {
       await this.start()
     }
+  }
+
+  /**
+   * Follow a human prompt into a different top-level session: the web client
+   * can keep several sessions live at once, so "first agent bound" is not the
+   * session the user is looking at. Reviewer construction is per-primary, so
+   * the old set is disposed before the new one starts.
+   * @param agent - the agent that just claimed human input.
+   */
+  private async rebind(agent: Agent): Promise<void> {
+    if (!this.enabled) return
+    if (this.primary === undefined) {
+      await this.maybeBind(agent)
+      return
+    }
+    if (this.primary.id === agent.id) return
+    if (!this.canBind(agent)) return
+    // A start/reset owns the reviewer map; the next prompt retries.
+    if (this.phase === 'starting' || this.phase === 'resetting') return
+    this.epoch++
+    this.phase = 'resetting'
+    await this.disposeReviewers()
+    this.adopt(agent, 'rebound to')
+    if (this.enabled) await this.start()
   }
 
   private async teardownPrimary(): Promise<void> {
@@ -337,15 +428,19 @@ export class AdvisorRuntime {
       const card = this.delivery.deferredCard
       // Terminal state is computed BEFORE the card delivery queues work.
       this.delivery.onPrimaryTurnEnd(inboxHasPending(primary))
-      if (card !== undefined) primary.inject(card)
-      void this.flushDeltas()
+      // Both the card and the feed touch the primary/reviewer while this
+      // append is still publishing; run them once the publish frame returns.
+      this.afterPublish('turn/end delivery', () => {
+        if (card !== undefined) primary.inject(card)
+        return this.flushDeltas()
+      })
       return
     }
     this.observer.observe(event)
     // Feed mid-turn deltas when the unobserved span grows, so a long tool
     // loop is still reviewed; turn/end covers the steady cadence.
     if (this.isLive() && this.pendingOverBudget()) {
-      void this.flushDeltas()
+      this.afterPublish('mid-turn delta flush', () => this.flushDeltas())
     }
   }
 
@@ -375,6 +470,9 @@ export class AdvisorRuntime {
       const args = this.adviseCalls.get(callId)
       if (args !== undefined) {
         this.adviseCalls.delete(callId)
+        // routeAdvice keeps its guard/immune/status decision synchronous
+        // (one macrotask must not move the rate-limit window); the append and
+        // inject/steer it triggers are scheduled past the publish frame.
         this.routeAdvice(reviewer, args.severity, args.note)
       }
     } else if (event.type === 'turn/end') {
@@ -389,10 +487,18 @@ export class AdvisorRuntime {
     if (primary === undefined || !this.enabled) return
     const guarded = this.guard.accept(note, reviewer.id)
     if (!guarded.accepted) return
+    // User-visible copy: a durable, replayable card in the primary transcript.
+    // Log-only, so it neither enters model history nor rewrites the surface;
+    // the model-side delivery below keeps its steer/immune semantics. Both
+    // touch the primary while the reviewer's append is publishing, so they
+    // run after the publish frame (FIFO keeps the card ahead of the delivery).
+    this.afterPublish('advisory record', () => {
+      this.recordAdvice(primary, reviewer, severity, note)
+    })
     const message = advisoryMessage(note, severity)
     if (this.delivery.immuneActive && isInterrupting(severity)) {
       // Downgraded to an aside until the immune window closes.
-      primary.inject(message)
+      this.afterPublish('advisory aside', () => primary.inject(message))
       return
     }
     if (primary.status === 'running') {
@@ -406,21 +512,38 @@ export class AdvisorRuntime {
     this.applyDecision(decision, message)
   }
 
-  private applyDecision(decision: ReturnType<typeof decideDelivery>, message: UserMessage): void {
+  /**
+   * Append the user-visible advisory card to the primary transcript. Best
+   * effort: a session-log failure must never suppress the model-side
+   * delivery, so the error is logged and routing continues.
+   * @param primary - the primary agent whose transcript receives the card.
+   * @param reviewer - the reviewer that produced the advice.
+   * @param severity - the advisory grade.
+   * @param note - the advisory note.
+   */
+  private recordAdvice(primary: Agent, reviewer: ReviewerHandle, severity: Severity, note: string): void {
+    try {
+      primary.session.append('advisor/advice', { severity, note, reviewer: reviewer.name })
+    } catch (error) {
+      this.ctx.logger.warn('dsh-advisor: failed to record advisory card: %o', error)
+    }
+  }
+
+  private applyDecision(decision: DeliveryDecision, message: UserMessage): void {
     const primary = this.primary
     if (primary === undefined) return
     switch (decision.channel) {
       case 'inject':
-        primary.inject(message)
+        this.afterPublish('advisory inject', () => primary.inject(message))
         return
       case 'steer':
-        primary.steer(message)
         this.delivery.spendBudget()
+        this.afterPublish('advisory steer', () => primary.steer(message))
         return
       case 'card':
         if (decision.deferred !== true) {
-          primary.inject(message)
           this.delivery.spendBudget()
+          this.afterPublish('advisory inject', () => primary.inject(message))
         }
         return
       default:
@@ -551,12 +674,34 @@ export class AdvisorRuntime {
     const sessionId = SessionId(`${primary.id}__advisor-${slugify(spec.name)}`)
     const cwd = primary.session.header.cwd
     const watchdog = this.watchdog
-    const handle = await this.ctx.agents.create({
-      sessionId,
-      ...cwd !== undefined ? { meta: { cwd } } : {},
-      agentOptions: this.reviewerAgentOptions(primary, spec),
-      setup: (agentCtx, agent) => this.setupReviewer(agentCtx, agent, spec, watchdog),
-    })
+    const agentOptions = this.reviewerAgentOptions(primary, spec)
+    // Reviewers are delegated children, not user conversations: mark the
+    // durable header so the Web session list keeps them out of the top level
+    // (origin) and the recursion budget survives a resume (delegationDepth).
+    const delegationDepth = (primary.session.header.delegationDepth ?? 0) + 1
+    const setup = (agentCtx: Context, agent: Agent): void => {
+      this.setupReviewer(agentCtx, agent, spec, watchdog)
+    }
+    let handle: AgentHandle
+    try {
+      handle = await this.ctx.agents.create({
+        sessionId,
+        meta: {
+          ...cwd !== undefined ? { cwd } : {},
+          origin: 'subagent',
+          delegationDepth,
+        },
+        agentOptions,
+        setup,
+      })
+    } catch (error) {
+      // The reviewer id is deterministic across restarts, so a persisted
+      // reviewer session from an earlier process lifetime is expected: resume
+      // that log instead of failing the whole reviewer set into `reviewers: 0`.
+      if (!isExistingSessionError(error)) throw error
+      this.ctx.logger.info('dsh-advisor: reviewer session %s already exists; resuming it', sessionId)
+      handle = await this.ctx.agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
+    }
     return { id: handle.agent.id, name: spec.name, spec, agent: handle.agent, handle }
   }
 
@@ -629,7 +774,7 @@ export class AdvisorRuntime {
     if (!this.enabled || this.primary === undefined) return
     if (this.phase === 'starting' || this.phase === 'resetting' || this.resetQueued) return
     this.resetQueued = true
-    void this.runReset(reason)
+    this.detach('advisor reset', this.runReset(reason))
   }
 
   private async runReset(reason: string): Promise<void> {

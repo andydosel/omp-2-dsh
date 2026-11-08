@@ -6,7 +6,7 @@
 
 import { vi, type Mock } from 'vitest'
 import { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SESSION_FORMAT_VERSION, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 
 /** One event listener registration on the fake context. */
@@ -61,11 +61,17 @@ export class FakeContext {
     list: () => this.listAgents,
     create: async (options: {
       sessionId: SessionId
-      meta?: { cwd?: string }
+      meta?: { cwd?: string; origin?: 'subagent'; delegationDepth?: number }
       agentOptions?: Record<string, unknown>
       setup?: (agentCtx: FakeAgentContext, agent: Agent) => unknown
     }): Promise<AgentHandle> => {
-      const session = Session.create(options.sessionId)
+      const session = Session.create(options.sessionId, undefined, {
+        version: SESSION_FORMAT_VERSION,
+        id: options.sessionId,
+        createdAt: Date.now(),
+        isSeeded: false,
+        ...options.meta,
+      })
       const agent = makeFakeReviewerAgent(options.sessionId, options.agentOptions ?? {}, session)
       const agentCtx = new FakeAgentContext(agent, {
         composedPreset: this.composedPreset,

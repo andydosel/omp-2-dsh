@@ -1,0 +1,24 @@
+# dsh-advisor bundle layer.
+#
+# One row: the advisor service (host runtime + `/advisor` commands) whose
+# package also ships the Web faces — the `advisor-advice` transcript card and
+# the session-header `ADVISOR` badge — through its `dsh.client` declaration.
+# The card needs no extra row: its Definition and renderer register from the
+# package's own client bundle, and the `advisor/advice` session event is part
+# of the harness vocabulary (0.2.1-rc.2).
+- insert:
+    - id: advisor
+      name: '@dsh-plugin/dsh-advisor'
+      disabled: false
+      config:
+        enabled: true
+        # Tools the reviewer may call while reviewing; intersected with the
+        # session's preset toolset at compose time.
+        defaultTools:
+          - read
+          - grep
+          - glob
+        # Primary turns a delivered concern/blocker keeps later ones downgraded.
+        immuneTurns: 3
+        # Bounded catch-up wait at primary turn end (0 = off).
+        syncBacklog: 0

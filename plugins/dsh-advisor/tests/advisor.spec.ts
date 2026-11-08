@@ -9,11 +9,11 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
-import { AdvisorRuntime, ROLE_SECTION } from '../src/advisor.ts'
+import { Session, SessionId, SESSION_FORMAT_VERSION, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { AdvisorRuntime, MID_TURN_FLUSH_EVENTS, ROLE_SECTION } from '../src/advisor.ts'
 import { resolveConfig, type ResolvedAdvisorConfig } from '../src/config.ts'
 import { advisorCommandHandler } from '../src/commands.ts'
 import {
@@ -62,6 +62,28 @@ function makePrimary(status: Agent['status'] = 'idle'): Agent {
   return makeFakeAgent('primary', session, { status })
 }
 
+/** The store's refusal when an append re-enters an open publish frame. */
+const REENTRY = 'session append cannot reenter while another append is being published'
+
+/**
+ * Replace a session's append with a guard that throws while the store is
+ * publishing (the fake stands in for the real re-entrancy guard).
+ * @param session - session whose append is guarded.
+ * @param publishing - whether the simulated publish frame is open.
+ * @returns the installed spy.
+ */
+function guardAppend(session: Session, publishing: () => boolean): Mock {
+  const real = session.append
+  const spy = vi.fn((...args: unknown[]) => {
+    if (publishing()) throw new Error(REENTRY)
+    return Reflect.apply(real, session, args)
+  })
+  // Test seam: the generic class method cannot carry the spy's plain
+  // signature; the replacement keeps the exact call shape.
+  session.append = spy as unknown as typeof session.append
+  return spy
+}
+
 function attach(config = makeConfig()): void {
   runtime = new AdvisorRuntime(ctx as unknown as Context, config)
   runtime.attach()
@@ -88,10 +110,17 @@ describe('reviewer construction', () => {
     expect(ctx.createSpy).toHaveBeenCalledTimes(1)
     const options = ctx.createSpy.mock.calls[0]![0] as {
       sessionId: SessionId
+      meta: { cwd?: string; origin?: 'subagent'; delegationDepth?: number }
       agentOptions: Record<string, unknown>
       setup: (agentCtx: unknown) => void
     }
     expect(String(options.sessionId)).toContain('primary__advisor-default')
+    // Delegated child, not a top-level conversation: the Web sidebar hides
+    // origin === 'subagent', and the depth is the persisted recursion floor.
+    expect(options.meta).toEqual({ cwd: tmp, origin: 'subagent', delegationDepth: 1 })
+    // The metadata reaches the durable header (the Web sidebar reads origin).
+    expect(ctx.created[0]!.session.header.origin).toBe('subagent')
+    expect(ctx.created[0]!.session.header.delegationDepth).toBe(1)
 
     const agentCtx = ctx.created[0]!.agentCtx
     expect(agentCtx.restrictSpy).toHaveBeenCalledWith({ allow: ['read', 'grep', 'glob'] })
@@ -140,11 +169,11 @@ describe('reviewer construction', () => {
     expect(ctx.created).toHaveLength(0)
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('failed to start reviewers'),
-      expect.stringContaining('no usable tools'),
+      expect.stringContaining('没有可用工具'),
     )
     const status = (advisorCommandHandler(runtime, 'status') as { text: string }).text
     expect(status).toContain('reviewers: 0 (error:')
-    expect(status).toContain('no usable tools')
+    expect(status).toContain('没有可用工具')
     expect(status).not.toContain('reviewers: none')
   })
 
@@ -258,6 +287,35 @@ describe('delta feeding', () => {
     expect(delta).not.toContain('pre-existing transcript')
   })
 
+  it('defers a mid-turn reviewer feed until the publishing append frame ends', async () => {
+    attach()
+    await bindPrimary()
+    const reviewer = ctx.created[0]!.agent
+    reviewer.followup.mockClear()
+
+    // Grow the unobserved span past the mid-turn threshold without emitting:
+    // the final append's `session/event` is the one that triggers the flush.
+    let trigger: SessionEvent | undefined
+    for (let index = 0; index < MID_TURN_FLUSH_EVENTS; index++) {
+      trigger = appendUserMessage(primary.session, `mid-turn ${index}`)
+    }
+    expect(trigger).toBeDefined()
+
+    let publishing = true
+    reviewer.followup.mockImplementation(() => {
+      if (publishing) throw new Error(REENTRY)
+    })
+
+    // The real store dispatches listeners inside the append's publish frame.
+    expect(() => ctx.emit('session/event', primary.session, trigger!)).not.toThrow()
+    expect(reviewer.followup).not.toHaveBeenCalled()
+
+    publishing = false
+    await flush()
+    expect(reviewer.followup).toHaveBeenCalledTimes(1)
+    expect(messageText(reviewer.followup.mock.calls[0]![0])).toContain('<advisor-delta')
+  })
+
   it('excludes advisor-plugin-sourced messages from deltas (self-advice filter)', async () => {
     attach()
     await bindPrimary()
@@ -329,6 +387,32 @@ describe('advise observation and delivery routing', () => {
     expect(primary.inject).not.toHaveBeenCalled()
   })
 
+  it('defers the advisory append and steer until the reviewer publish frame ends', async () => {
+    attach()
+    await bindPrimary()
+    const reviewer = ctx.created[0]!
+    const { call, result } = appendAdviseCall(reviewer.session, 'concern', 'deferred advice')
+
+    let publishing = true
+    const appendSpy = guardAppend(primary.session, () => publishing)
+    primary.steer.mockImplementation(() => {
+      if (publishing) throw new Error(REENTRY)
+    })
+
+    ctx.emit('session/event', reviewer.session, call)
+    ctx.emit('session/event', reviewer.session, result)
+    // Neither the durable card nor the model-side steer may run inside the
+    // reviewer's open publish frame.
+    expect(appendSpy).not.toHaveBeenCalled()
+    expect(primary.steer).not.toHaveBeenCalled()
+
+    publishing = false
+    await flush()
+    expect(appendSpy).toHaveBeenCalledWith('advisor/advice', expect.objectContaining({ note: 'deferred advice' }))
+    expect(primary.steer).toHaveBeenCalledTimes(1)
+    expect(isAdvisory(primary.steer.mock.calls[0]![0], 'concern')).toBe(true)
+  })
+
   it('queues a running concern and delivers it as a card after turn end (terminal policy)', async () => {
     attach()
     await bindPrimary()
@@ -352,6 +436,31 @@ describe('advise observation and delivery routing', () => {
     ctx.emit('session/event', primary.session, end)
     await flush()
     expect(primary.steer).not.toHaveBeenCalled()
+    expect(primary.inject).toHaveBeenCalledTimes(1)
+    expect(isAdvisory(primary.inject.mock.calls[0]![0], 'concern')).toBe(true)
+  })
+
+  it('defers the turn-end card inject until the primary publish frame ends', async () => {
+    attach()
+    await bindPrimary()
+    primary.status = 'running'
+    const reviewer = ctx.created[0]!
+    const { call, result } = appendAdviseCall(reviewer.session, 'concern', 'queued at the end')
+    ctx.emit('session/event', reviewer.session, call)
+    ctx.emit('session/event', reviewer.session, result)
+    await flush()
+    ctx.emit('agent/turn-stopping', { agent: primary, turn: 1, signal: new AbortController().signal })
+
+    let publishing = true
+    primary.inject.mockImplementation(() => {
+      if (publishing) throw new Error(REENTRY)
+    })
+    const end = appendTurnEnd(primary.session)
+    expect(() => ctx.emit('session/event', primary.session, end)).not.toThrow()
+    expect(primary.inject).not.toHaveBeenCalled()
+
+    publishing = false
+    await flush()
     expect(primary.inject).toHaveBeenCalledTimes(1)
     expect(isAdvisory(primary.inject.mock.calls[0]![0], 'concern')).toBe(true)
   })

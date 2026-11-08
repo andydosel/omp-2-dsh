@@ -15,7 +15,7 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { escapeXml } from '@dsh-plugin/dsh-util/xml'
+import { escapeXml } from './xml.ts'
 import type { Severity } from './severity.ts'
 import { isInterrupting } from './severity.ts'
 

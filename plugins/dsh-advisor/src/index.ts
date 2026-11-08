@@ -14,6 +14,7 @@ import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { AdvisorRuntime } from './advisor.ts'
 import { registerAdvisorCommands } from './commands.ts'
 import { resolveConfig, type AdvisorConfig, type ResolvedAdvisorConfig } from './config.ts'
+import { registerAdvisorStatusProjection } from './status-projection.ts'
 
 export { AdvisorRuntime } from './advisor.ts'
 export type { ReviewerHandle, ReviewerSpec, AdvisorPhase } from './advisor.ts'
@@ -32,6 +33,8 @@ export { isSeverity, isInterrupting, SEVERITIES } from './severity.ts'
 export type { Severity } from './severity.ts'
 export { discoverWatchdog, parseWatchdogYml, renderWatchdogGuidance, WATCHDOG_MD, WATCHDOG_YML, MAX_WATCHDOG_BYTES, nodeWatchdogFileSystem } from './watchdog.ts'
 export type { WatchdogSource, WatchdogRoster, WatchdogRosterEntry, WatchdogMdFile, WatchdogDiscoveryOptions, WatchdogFileSystem } from './watchdog.ts'
+export { registerAdvisorStatusProjection, viewAdvisorStatus } from './status-projection.ts'
+export type { AdvisorStatusProjection, AdvisorStatusUnitState } from './types.ts'
 export { resolveConfig, Config } from './config.ts'
 export type { AdvisorConfig, ResolvedAdvisorConfig, AdvisorWatchdogConfig } from './config.ts'
 export { advisorCommandHandler, registerAdvisorCommands } from './commands.ts'
@@ -71,6 +74,7 @@ export class AdvisorController extends Service {
     this.runtime = new AdvisorRuntime(ctx, resolved)
     this.runtime.attach()
     registerAdvisorCommands(ctx, this.runtime)
+    registerAdvisorStatusProjection(ctx, () => this.runtime.status())
   }
 }
 

@@ -1,0 +1,80 @@
+/* Advisor advisory card: one severity-graded entry in the transcript flow. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Match the transcript column: the keyed node seat is a block-level flow
+     item, so width:100% equals the chat content width. border-box keeps the
+     border/padding inside that width (the app does not set a global
+     box-sizing), and align-self covers flex seats. */
+  width: 100%;
+  box-sizing: border-box;
+  align-self: stretch;
+  padding: 10px 12px;
+  border: 1px solid var(--dsh-border, rgba(128, 128, 128, 0.35));
+  border-left: 3px solid var(--dsh-border-strong, rgba(128, 128, 128, 0.65));
+  border-radius: 8px;
+  background: var(--dsh-surface-raised, rgba(128, 128, 128, 0.06));
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  font-family: var(--dsh-font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.source {
+  font-size: 11px;
+  color: var(--dsh-text-secondary, #8a8f98);
+}
+
+.note {
+  margin: 0;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* nit: non-interrupting aside, quiet slate. */
+.nit {
+  border-left-color: rgba(100, 116, 139, 0.75);
+}
+
+.nit .badge {
+  color: var(--dsh-text-secondary, #8a8f98);
+  background: rgba(100, 116, 139, 0.12);
+}
+
+/* concern: substantive risk, amber. */
+.concern {
+  border-left-color: rgba(180, 83, 9, 0.8);
+}
+
+.concern .badge {
+  color: #b45309;
+  background: rgba(180, 83, 9, 0.12);
+}
+
+/* blocker: continued work is wasted, red. */
+.blocker {
+  border-left-color: rgba(185, 28, 28, 0.85);
+}
+
+.blocker .badge {
+  color: #b91c1c;
+  background: rgba(185, 28, 28, 0.12);
+}

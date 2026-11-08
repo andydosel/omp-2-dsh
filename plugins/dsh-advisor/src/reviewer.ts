@@ -74,9 +74,9 @@ export function composeReviewer(agentCtx: Context, agent: Agent, options: Compos
   }
   if (allowed.length === 0) {
     throw new Error(
-      `dsh-advisor: reviewer "${options.name}" has no usable tools in the agent toolset `
-      + `(configured: ${options.tools.join(', ') || '(none)'}; `
-      + `known global tools: ${[...present].sort().join(', ') || '(none)'})`,
+      `顾问审查者 "${options.name}" 在 agent 工具集中没有可用工具`
+      + `(配置:${options.tools.join(', ') || '(无)'};`
+      + `已知全局工具:${[...present].sort().join(', ') || '(无)'})`,
     )
   }
   agentCtx.tools.restrict({ allow: allowed })

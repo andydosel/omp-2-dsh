@@ -23,17 +23,17 @@ export function advisorCommandHandler(runtime: AdvisorRuntime, rawInput: string)
     case '':
     case 'on': {
       runtime.enable()
-      return { kind: 'success', text: 'Advisor enabled. Use /advisor status to inspect reviewers, /advisor off to disable.' }
+      return { kind: 'success', text: '顾问已启用。用 /advisor status 查看审查者,用 /advisor off 关闭。' }
     }
     case 'off': {
       runtime.disable()
-      return { kind: 'success', text: 'Advisor disabled.' }
+      return { kind: 'success', text: '顾问已关闭。' }
     }
     case 'status': {
       return { kind: 'success', text: runtime.statusText() }
     }
     default: {
-      return { kind: 'error', text: 'usage: /advisor [on|off|status]' }
+      return { kind: 'error', text: '用法:/advisor [on|off|status]' }
     }
   }
 }

@@ -69,10 +69,10 @@ export function defineAdviseTool(): ToolDefinition {
     },
     execute: async (args) => {
       if (!isSeverity(args.severity)) {
-        throw new Error(`advise: invalid severity ${JSON.stringify(args.severity)} (expected nit|concern|blocker)`)
+        throw new Error(`advise:severity ${JSON.stringify(args.severity)} 无效(应为 nit|concern|blocker)`)
       }
       if (args.note.trim() === '') {
-        throw new Error('advise: note must be non-empty')
+        throw new Error('advise:建议内容不能为空')
       }
       return { severity: args.severity, note: args.note } satisfies AdviseValue
     },
