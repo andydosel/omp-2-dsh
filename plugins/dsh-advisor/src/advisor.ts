@@ -112,13 +112,19 @@ function isExistingSessionError(error: unknown): boolean {
   return error.name === 'SessionAlreadyExistsError' || /session .* already exists/i.test(error.message)
 }
 
-/** Parse the raw `arguments` JSON string of an advise tool call. */
-function parseAdviseArgs(raw: string): AdviseArgs | undefined {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return undefined
+/**
+ * Parse the `arguments` of an advise call. A native tool surface records the
+ * raw JSON string on `tool/call`; a PTC surface records the already
+ * JSON-normalized value on `tool/ptc-dispatch`, so both shapes are accepted.
+ */
+function parseAdviseArgs(raw: unknown): AdviseArgs | undefined {
+  let parsed: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return undefined
+    }
   }
   if (parsed === null || typeof parsed !== 'object') return undefined
   const record = parsed as Record<string, unknown>
@@ -515,6 +521,15 @@ export class AdvisorRuntime {
     if (event.type === 'tool/call' && event.data.name === ADVISE_TOOL) {
       const args = parseAdviseArgs(event.data.arguments)
       if (args !== undefined) this.adviseCalls.set(event.data.callId, args)
+    } else if (event.type === 'tool/ptc-dispatch' && event.data.name === ADVISE_TOOL) {
+      // PTC preset: the reviewer's only tool is `run_code`, so `advise` runs as
+      // a bridged sub-call. That path logs no `tool/call`/`tool/result` pair —
+      // the settle event carries both the normalized arguments and the outcome,
+      // so route straight from it. Without this branch the reviewer reports
+      // "Advisory recorded" while nothing ever reaches the primary.
+      if (event.data.isError) return
+      const args = parseAdviseArgs(event.data.arguments)
+      if (args !== undefined) this.routeAdvice(reviewer, args.severity, args.note)
     } else if (event.type === 'tool/result') {
       const callId = event.data.message.source.callId
       const args = this.adviseCalls.get(callId)

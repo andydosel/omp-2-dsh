@@ -215,6 +215,33 @@ export function appendToolResult(session: Session, callId: string, text: string)
   return session.append('tool/result', { turn: 1, step: 1, message }, { surfaceOp: 'append' })
 }
 
+/**
+ * Append the settle event of a PTC-bridged `advise` sub-call. In a PTC preset
+ * the reviewer's only native tool is `run_code`; `advise` runs inside it and
+ * logs a `tool/ptc-dispatch` (no `tool/call` + `tool/result` pair).
+ * @param session - the reviewer session.
+ * @param severity - advisory grade.
+ * @param note - advisory note.
+ * @param subCallId - opaque sub-call id.
+ * @returns the appended settle event.
+ */
+export function appendPtcAdviseDispatch(
+  session: Session,
+  severity: string,
+  note: string,
+  subCallId = 'adv-ptc-1',
+): SessionEvent {
+  return session.append('tool/ptc-dispatch', {
+    rootCallId: ToolCallId('run-1'),
+    parentCallId: ToolCallId('run-1'),
+    subCallId: ToolCallId(subCallId),
+    name: 'advise',
+    arguments: { severity, note },
+    isError: false,
+    content: [{ type: 'text', text: `Advisory recorded: ${severity}` }],
+  })
+}
+
 /** Append a completed turn boundary pair (or just the end). */
 export function appendTurnEnd(session: Session, turn = 1): SessionEvent {
   session.append('turn/start', { turn })

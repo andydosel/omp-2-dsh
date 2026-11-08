@@ -18,6 +18,7 @@ import { resolveConfig, type ResolvedAdvisorConfig } from '../src/config.ts'
 import { advisorCommandHandler } from '../src/commands.ts'
 import {
   appendAdviseCall,
+  appendPtcAdviseDispatch,
   appendTurnEnd,
   appendUserMessage,
   FakeContext,
@@ -400,6 +401,32 @@ describe('advise observation and delivery routing', () => {
     expect(primary.steer).not.toHaveBeenCalled()
     const message = primary.inject.mock.calls[0]![0]
     expect(isAdvisory(message, 'nit')).toBe(true)
+  })
+
+  it('routes a PTC-bridged advise dispatch (reviewer has only run_code)', async () => {
+    attach()
+    await bindPrimary()
+    const reviewer = ctx.created[0]!
+    const settle = appendPtcAdviseDispatch(reviewer.session, 'concern', 'the PTC reviewer can advise')
+    ctx.emit('session/event', reviewer.session, settle)
+    await flush()
+
+    expect(primary.steer).toHaveBeenCalledTimes(1)
+    expect(isAdvisory(primary.steer.mock.calls[0]![0], 'concern')).toBe(true)
+    expect(primary.session.snapshotEvents().some(event => event.type === 'advisor/advice')).toBe(true)
+  })
+
+  it('ignores a failed PTC dispatch', async () => {
+    attach()
+    await bindPrimary()
+    const reviewer = ctx.created[0]!
+    const settle = appendPtcAdviseDispatch(reviewer.session, 'concern', 'never delivered')
+    const failed = { ...settle, data: { ...settle.data, isError: true } }
+    ctx.emit('session/event', reviewer.session, failed as SessionEvent)
+    await flush()
+
+    expect(primary.steer).not.toHaveBeenCalled()
+    expect(primary.inject).not.toHaveBeenCalled()
   })
 
   it('steers a concern on an idle fresh session', async () => {
