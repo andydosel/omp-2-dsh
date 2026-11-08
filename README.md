@@ -59,8 +59,12 @@ DeepSeek Harness(dsh),**不改动 dsh 核心**。11 个可运行插件在启动�
 | 秘书 / 负责人 / worker 三层组织(面板 + `ORG · role` 徽标 + 侧栏归属标记 + 会话间投递) | `dsh-org` | `peers` + `org` |
 | 微信通道(host 长轮询 + `/wechat` 命令 + header `WECHAT` 徽标) | `dsh-channel-wechat` | `channel-wechat` |
 
+> 顾问的完整独立安装说明(打包成 `.tgz` 分发给其它机器、构建、配置字段、故障排查)见
+> [`plugins/dsh-advisor/README.md`](plugins/dsh-advisor/README.md)。
+
 > **ADVISOR 徽标是设置面板**:点开后可以开关顾问,并从模型目录里选审查者模型(首项「跟随主会话模型」)。
-> 选择持久化在 `$DSH_HOME/storages/advisor-state.json`,重启后仍生效;命令行等价:`/advisor model`(报告当前)、
+> 选择会持久化(设置了 `DSH_HOME` 时写 `$DSH_HOME/storages/advisor-state.json`,否则写服务器工作目录下的
+> `./.advisor-state.json`),重启后仍生效;命令行等价:`/advisor model`(报告当前)、
 > `/advisor model <provider/model>`(设置)、`/advisor model follow`(恢复跟随)。改模型时若顾问已开启,
 > 正在跑的审查者会被重建以套用新模型。
 
