@@ -24,6 +24,7 @@ import { AccountStore, ContextTokenStore, SyncStore, resolvePairingDir } from '.
 import { resolveStateDir } from './config.ts'
 import { validateConfig, assertDeployableConfig } from './invariant.ts'
 import { join } from 'node:path'
+import { registerWechatStatusProjection } from './status-projection.ts'
 
 export { Config } from './config.ts'
 
@@ -31,6 +32,9 @@ export { Config } from './config.ts'
 // home); this re-export keeps the module edge in the emitted index.d.ts, so
 // aggregate programs consuming the declarations still receive the merge.
 export type * from './types.ts'
+
+// The projection's host half: the header badge's fold (also exported for tests).
+export { registerWechatStatusProjection, viewWechatChannel } from './status-projection.ts'
 
 export const name = 'dsh-channel-wechat'
 
@@ -45,13 +49,32 @@ export function apply(ctx: Context, config: import('./config.ts').Config): void 
     throw new Error(`dsh-channel-wechat: ${message}`)
   })
 
-  if (!config.enabled) return
+  // The header badge's host half ships with this package: register the
+  // `wechatChannel` fold before the startup gates below so a disabled or
+  // misconfigured channel still reports a usable offline state.
+  registerWechatStatusProjection(ctx)
+
+  // `/wechat` is registered before the startup gates below so the badge can
+  // always resolve the command and read why the channel is idle.
+  if (!config.enabled) {
+    registerWechatCommand(ctx, () => ({
+      kind: 'success',
+      text: '微信通道已禁用(config.enabled=false)。将 plugins.dsh-channel-wechat.enabled 设为 true 可启动 iLink 轮询。',
+    }))
+    return
+  }
 
   const fail = (message: string): never => {
     throw new Error(`dsh-channel-wechat: ${message}`)
   }
   const deployable = tryDeployableConfig(config, fail)
-  if (!deployable) return
+  if (!deployable) {
+    registerWechatCommand(ctx, () => ({
+      kind: 'error',
+      text: '微信通道未启动:配置未通过启动检查(详见服务端日志)。',
+    }))
+    return
+  }
 
   const stateDir = resolveStateDir(config)
   const accountsDir = join(stateDir, 'accounts')
@@ -112,8 +135,9 @@ export function apply(ctx: Context, config: import('./config.ts').Config): void 
     logger,
   })
 
-  // Expose the channel-global state to the mode-ui projection (no session
-  // event): `ctx.get('wechat').status()` returns { connected, account }.
+  // Expose the channel-global state to this package's own `wechatChannel`
+  // projection (no session event): `ctx.get('wechat').status()` returns
+  // { connected, account }.
   ctx.provide('wechat', { status: () => adapter!.status() })
 
 
@@ -130,20 +154,34 @@ export function apply(ctx: Context, config: import('./config.ts').Config): void 
 
   // `/wechat` commands are composition-conditional: registered when the
   // commands service is mounted.
+  registerWechatCommand(ctx, (rawInput) => handleWechatCommand(rawInput, {
+    config,
+    stateDir,
+    adapter: adapter!,
+    sessionManager,
+    pairingStore,
+    tokenStore,
+    syncStore,
+    accountId: config.accountId,
+  }))
+}
+
+/**
+ * Register the `/wechat` command. Composition-conditional on the `commands`
+ * service, independent of the channel's runtime state: a disabled or
+ * misconfigured channel still answers with an explicit status line.
+ * @param ctx - the plugin context.
+ * @param handler - the raw-input handler (line after `/wechat`).
+ */
+function registerWechatCommand(
+  ctx: Context,
+  handler: (rawInput: string) => CommandResult | Promise<CommandResult>,
+): void {
   ctx.inject(['commands'], (cmdCtx) => {
     cmdCtx.commands.register({
       name: 'wechat',
       description: 'WeChat channel status, config, and DM pairing management',
-      handler: (invocation) => handleWechatCommand(invocation.rawInput, {
-        config,
-        stateDir,
-        adapter: adapter!,
-        sessionManager,
-        pairingStore,
-        tokenStore,
-        syncStore,
-        accountId: config.accountId,
-      }),
+      handler: (invocation) => handler(invocation.rawInput),
     })
   })
 }
@@ -228,7 +266,7 @@ export async function handleWechatCommand(rawInput: string, ctx: WechatCommandCo
     default:
       return {
         kind: 'error',
-        text: `Unknown /wechat subcommand "${sub}". Try: status, config, pairing approve <code>, pairing list, pairing pending, pairing revoke <user_id>, pairing clear-pending`,
+        text: `未知 /wechat 子命令 "${sub}"。可用:status、config、pairing approve <code>、pairing list、pairing pending、pairing revoke <user_id>、pairing clear-pending`,
       }
   }
 }
@@ -238,52 +276,52 @@ async function handlePairingSubcommand(parts: string[], ctx: WechatCommandContex
   switch (sub) {
     case 'approve': {
       const code = parts[1] ?? ''
-      if (!code) return { kind: 'error', text: 'Usage: /wechat pairing approve <8-char code>' }
+      if (!code) return { kind: 'error', text: '用法:/wechat pairing approve <8 位配对码>' }
       const result = await ctx.pairingStore.approveCode('weixin', code)
       if (result === undefined) {
         const locked = ctx.pairingStore.isLockedOut('weixin')
         return {
           kind: 'error',
           text: locked
-            ? 'Pairing is locked out after too many failed attempts; try again later.'
-            : 'Invalid or expired pairing code.',
+            ? '失败次数过多,配对已锁定;请稍后再试。'
+            : '配对码无效或已过期。',
         }
       }
-      return { kind: 'success', text: `Approved ${result.user_name || result.user_id} (${result.user_id})` }
+      return { kind: 'success', text: `已批准 ${result.user_name || result.user_id} (${result.user_id})` }
     }
     case 'list': {
       const approved = ctx.pairingStore.listApproved('weixin')
-      if (approved.length === 0) return { kind: 'success', text: 'No approved users.' }
+      if (approved.length === 0) return { kind: 'success', text: '暂无已批准用户。' }
       const lines = approved.map((entry) => {
         const at = new Date(entry.approved_at * 1000).toISOString()
         return `  ${entry.user_id} (${entry.user_name}, approved ${at})`
       })
-      return { kind: 'success', text: `Approved users:\n${lines.join('\n')}` }
+      return { kind: 'success', text: `已批准用户:\n${lines.join('\n')}` }
     }
     case 'pending': {
       const pending = await ctx.pairingStore.listPending('weixin')
-      if (pending.length === 0) return { kind: 'success', text: 'No pending pairing requests.' }
+      if (pending.length === 0) return { kind: 'success', text: '暂无待处理配对请求。' }
       const lines = pending.map((entry) => (
         `  ${entry.code} ${entry.user_id} (${entry.user_name}, ${entry.age_minutes}m old)`
       ))
-      return { kind: 'success', text: `Pending pairing requests:\n${lines.join('\n')}` }
+      return { kind: 'success', text: `待处理配对请求:\n${lines.join('\n')}` }
     }
     case 'revoke': {
       const userId = parts.slice(1).join(' ')
-      if (!userId) return { kind: 'error', text: 'Usage: /wechat pairing revoke <user_id>' }
+      if (!userId) return { kind: 'error', text: '用法:/wechat pairing revoke <user_id>' }
       const removed = await ctx.pairingStore.revoke('weixin', userId)
       return removed
-        ? { kind: 'success', text: `Revoked ${userId}` }
-        : { kind: 'error', text: `No approved user "${userId}".` }
+        ? { kind: 'success', text: `已撤销 ${userId}` }
+        : { kind: 'error', text: `没有已批准用户 "${userId}"。` }
     }
     case 'clear-pending': {
       const count = await ctx.pairingStore.clearPending('weixin')
-      return { kind: 'success', text: `Cleared ${count} pending request(s).` }
+      return { kind: 'success', text: `已清除 ${count} 个待处理请求。` }
     }
     default:
       return {
         kind: 'error',
-        text: 'Usage: /wechat pairing {approve <code> | list | pending | revoke <user_id> | clear-pending}',
+        text: '用法:/wechat pairing {approve <code> | list | pending | revoke <user_id> | clear-pending}',
       }
   }
 }

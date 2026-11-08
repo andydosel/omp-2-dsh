@@ -111,7 +111,7 @@ describe('/wechat command handlers', () => {
   it('rejects an invalid pairing code', async () => {
     const result = await handleWechatCommand('pairing approve WRONG123', makeContext())
     expect(result.kind).toBe('error')
-    if (result.kind === 'error') expect(result.text).toMatch(/Invalid or expired/)
+    if (result.kind === 'error') expect(result.text).toMatch(/配对码无效或已过期/)
   })
 
   it('lists pending with code prefixes and clears pending', async () => {
@@ -127,7 +127,7 @@ describe('/wechat command handlers', () => {
     const cleared = await handleWechatCommand('pairing clear-pending', ctx)
     expect(cleared.kind).toBe('success')
     const empty = await handleWechatCommand('pairing pending', ctx)
-    if (empty.kind === 'success') expect(empty.text).toContain('No pending')
+    if (empty.kind === 'success') expect(empty.text).toContain('暂无待处理配对请求')
   })
 
   it('revokes an approved user', async () => {

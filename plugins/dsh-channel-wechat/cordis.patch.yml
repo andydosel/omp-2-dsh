@@ -1,0 +1,26 @@
+# Standalone install row for the WeChat (iLink Bot) channel.
+#
+# `dsh plugin add <this package>` appends this file to the profile bundle list
+# (`dsh.profile.bundles` in profiles/<name>/package.json); the row below mounts
+# the plugin itself. Installing the package IS the opt-in, so enabled defaults
+# to true. With empty credentials the channel stays idle (no network, no
+# crash) and /wechat answers 配置未通过启动检查 until accountId/token are set.
+#
+# 同一 iLink bot 账号只能有一个网关在线(后启动者 403):若 hermes 正在使用该
+# 账号,先停掉 hermes 网关,或把 stateDir 指向 hermes 的 weixin/ 目录接管状态。
+- insert:
+    - id: channel-wechat
+      name: '@dsh-plugin/dsh-channel-wechat'
+      disabled: false
+      config:
+        enabled: true
+        # iLink bot 账号 id,形如 "c5610f3ce386@im.bot"(hermes 的 WEIXIN_ACCOUNT_ID)。
+        # 留空 = 通道不启动;/wechat status 会提示配置未通过启动检查。
+        accountId: ''
+        # iLink token,形如 "{account_id}:{secret}"(hermes 的 WEIXIN_TOKEN)。
+        token: ''
+        # 留空 = $DSH_HOME/wechat;可指向 hermes 的 weixin/ 目录以接管同一账号的
+        # accounts/ 与 pairing/ 状态。
+        stateDir: ''
+        dmPolicy: pairing       # open | allowlist | pairing | disabled
+        groupPolicy: disabled   # disabled | open | allowlist

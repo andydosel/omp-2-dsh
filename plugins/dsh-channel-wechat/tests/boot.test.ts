@@ -5,6 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as plugin from '../src/index.ts'
 
+/** Read the `text` field of a command result after checking its runtime shape. */
+function commandText(result: unknown): string {
+  if (result !== null && typeof result === 'object' && 'text' in result && typeof result.text === 'string') {
+    return result.text
+  }
+  throw new Error(`command result has no text field: ${JSON.stringify(result)}`)
+}
+
 /** Boot the real Cordis plugin entry with stub services (no harness). */
 async function bootPlugin(config: Record<string, unknown>, provideCommands = true): Promise<{
   followups: string[]
@@ -63,7 +71,7 @@ describe('plugin boot (real Cordis)', () => {
       // /wechat command registered
       expect(boot.commands.has('wechat')).toBe(true)
       const status = await boot.commands.get('wechat')!('status')
-      expect(String((status as { text: string }).text)).toContain('poll: running')
+      expect(commandText(status)).toContain('poll: running')
       await boot.dispose()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -74,16 +82,24 @@ describe('plugin boot (real Cordis)', () => {
     await expect(bootPlugin({ dmPolicyy: 'open' })).rejects.toThrow(/unknown config key/)
   })
 
-  it('skips startup when disabled', async () => {
+  it('keeps the command registered and reports disabled when enabled=false', async () => {
     const boot = await bootPlugin({ enabled: false })
-    expect(boot.commands.has('wechat')).toBe(false)
+    // Registered before the startup gate so the mode-ui badge always resolves
+    // the command and can surface why the channel is idle.
+    expect(boot.commands.has('wechat')).toBe(true)
+    const result = await boot.commands.get('wechat')!('status')
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(commandText(result)).toContain('微信通道已禁用(config.enabled=false)')
     await boot.dispose()
   })
 
-  it('stays disabled (no crash) when credentials are missing', async () => {
+  it('keeps the command registered and reports the startup failure when credentials are missing', async () => {
     const boot = await bootPlugin({ accountId: '', token: '' })
-    // plugin applied without throwing; no command because deployability failed
-    expect(boot.commands.has('wechat')).toBe(false)
+    // Applied without throwing; the command explains why the channel is idle.
+    expect(boot.commands.has('wechat')).toBe(true)
+    const result = await boot.commands.get('wechat')!('status')
+    expect(result).toMatchObject({ kind: 'error' })
+    expect(commandText(result)).toContain('配置未通过启动检查')
     await boot.dispose()
   })
 })
