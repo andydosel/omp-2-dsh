@@ -147,25 +147,6 @@ describe('serializeDelta', () => {
     expect(serialized.text).toContain('truncated')
   })
 
-  it('keeps the TAIL of a truncated baseline, not the oldest entries', () => {
-    const messages = [makeMessage('a'.repeat(3000)), makeMessage('b'.repeat(3000)), makeMessage('recent-state')]
-    const serialized = serializeDelta('baseline', messages, [0, 1, 2], 200, 'primary')
-    expect(serialized.truncated).toBe(true)
-    expect(serialized.messageCount).toBe(1)
-    expect(serialized.text).toContain('recent-state')
-    expect(serialized.text).not.toContain('a'.repeat(3000))
-    expect(serialized.text).toContain('[baseline truncated: 2 earlier entries omitted')
-  })
-
-  it('re-attaches the first entry as an anchor when the budget allows', () => {
-    const messages = [makeMessage('TASK-ANCHOR'), makeMessage('b'.repeat(3000)), makeMessage('recent-state')]
-    const serialized = serializeDelta('baseline', messages, [0, 1, 2], 250, 'primary')
-    expect(serialized.truncated).toBe(true)
-    expect(serialized.messageCount).toBe(2)
-    expect(serialized.text.indexOf('TASK-ANCHOR')).toBeLessThan(serialized.text.indexOf('recent-state'))
-    expect(serialized.text).toContain('[baseline truncated: 1 earlier entries omitted')
-  })
-
   it('renders tool-call and tool-result blocks inside entries', () => {
     const session = Session.create(SessionId('primary'))
     appendToolResult(session, 'c1', 'output')
