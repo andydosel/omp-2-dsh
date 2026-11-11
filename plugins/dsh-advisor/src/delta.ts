@@ -169,8 +169,15 @@ function renderEntry(seq: number, message: Message): string {
 
 /**
  * Serialize a message batch into one reviewer feed prompt, bounded by a token
- * budget (chars/4 heuristic). Truncation keeps the head of the batch and
- * marks the cut so the reviewer knows the transcript was trimmed.
+ * budget (chars/4 heuristic).
+ *
+ * The truncation direction follows the frame. A `delta` keeps the HEAD: new
+ * activity is read chronologically, and the oldest entry in a delta is the
+ * next thing to review. A `baseline` keeps the TAIL: a rebuilt reviewer must
+ * see the CURRENT state, and a long session's oldest entries are exactly what
+ * it can afford to lose. A truncated baseline re-attaches the first entry as
+ * an anchor when the budget allows, so the request that started the session is
+ * never silently dropped. Both frames mark the cut.
  * @param kind - `baseline` frames the whole bounded surface after a reset;
  *   `delta` frames new activity since the last feed.
  * @param messages - projected messages in surface order.
@@ -197,29 +204,74 @@ export function serializeDelta(
   const footer = `\n</${frame}>\n\nEvaluate the activity above against your guidance. If the primary agent needs correction, call the \`advise\` tool with a severity grade (\`nit\` = non-interrupting aside, \`concern\` = substantive risk, \`blocker\` = continued work is wasted) and a concise, actionable note. Weigh your guidance: the primary agent decides.`
   const budget = Math.max(1, Math.floor(maxTokens * 4))
 
-  let body = ''
-  let count = 0
-  let truncated = false
+  const rendered: { seq: number; entry: string }[] = []
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i]
     if (message === undefined) continue
     const seq = seqs[i] ?? 0
-    const entry = renderEntry(seq, message)
-    const candidate = body + entry + '\n'
-    // Always keep the first entry even if it alone overflows the budget;
-    // everything after the budget boundary is dropped.
-    if (count > 0 && body.length + entry.length + header.length + footer.length > budget) {
-      truncated = true
-      break
-    }
-    body = candidate
-    count++
+    rendered.push({ seq, entry: renderEntry(seq, message) })
   }
+
+  const fixed = header.length + footer.length
+  let body = ''
+  let count = 0
+  let truncated = false
+
+  if (isBaseline) {
+    // Walk backwards: keep the most recent entries that fit, drop the oldest.
+    let start = rendered.length
+    while (start > 0) {
+      const entry = rendered[start - 1]
+      if (entry === undefined) break
+      const candidate = body === '' ? entry.entry : `${entry.entry}\n${body}`
+      // Always keep the newest entry even if it alone overflows the budget.
+      if (count > 0 && fixed + candidate.length > budget) break
+      body = candidate
+      count++
+      start--
+    }
+    truncated = start > 0
+    if (truncated) {
+      const first = rendered[0]
+      // Anchor the request that started the session when it still fits
+      // alongside the tail and its omission marker.
+      const anchorCost = first === undefined
+        ? Number.POSITIVE_INFINITY
+        : first.entry.length + 1 + (start > 1 ? baselineMarker(start - 1).length + 1 : 0)
+      if (first !== undefined && fixed + anchorCost + body.length + 1 <= budget) {
+        body = (start > 1 ? `${first.entry}\n${baselineMarker(start - 1)}\n` : `${first.entry}\n`) + body
+        count++
+        // The anchor is present, so only the entries between it and the tail
+        // are actually omitted.
+        truncated = start > 1
+      } else {
+        body = `${baselineMarker(start)}\n${body}`
+      }
+    }
+  } else {
+    for (const entry of rendered) {
+      const candidate = body + entry.entry + '\n'
+      // Always keep the first entry even if it alone overflows the budget;
+      // everything after the budget boundary is dropped.
+      if (count > 0 && fixed + candidate.length > budget) {
+        truncated = true
+        break
+      }
+      body = candidate
+      count++
+    }
+  }
+
   let text = header + body + footer
-  if (truncated) {
+  if (truncated && !isBaseline) {
     text = header + body + '\n[delta truncated: further entries exceed the token budget]\n' + footer
   }
   return { text, messageCount: count, truncated }
+}
+
+/** Marker naming how many baseline entries were dropped for the budget. */
+function baselineMarker(omitted: number): string {
+  return `[baseline truncated: ${omitted} earlier entries omitted to stay within the token budget]`
 }
 
 /** Render a seq range like `10..12` (or a bare seq for one). */
